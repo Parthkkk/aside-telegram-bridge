@@ -1,0 +1,16 @@
+{
+ "token": "YOUR_BOT_TOKEN_FROM_BOTFATHER",
+ "chat_id": 123456789,
+ "owner_name": "yourname",
+ "default_model": "claude-sonnet-5",
+ "session_id": "",
+ "aside_cli": "~/.aside/cli/Aside CLI.app/Contents/MacOS/aside",
+ "sessions_dir": "~/.aside/u/0/sessions",
+ "credentials_path": "~/.aside/u/0/credentials.json",
+ "exec_timeout_seconds": 1200,
+ "model_aliases": {
+  "sonnet": "claude-sonnet-5",
+  "fable": "claude-fable-5",
+  "opus": "claude-opus-4-8"
+ }
+}
