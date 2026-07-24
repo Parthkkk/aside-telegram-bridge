@@ -4,3 +4,9 @@ state.json
 media/
 __pycache__/
 *.pyc
+backups/
+.DS_Store
+channel-guard*.py
+channel-guard*.json
+monitor-native-channel.py
+rollback-native-migration.sh

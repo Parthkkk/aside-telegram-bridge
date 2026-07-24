@@ -88,11 +88,27 @@ Three layers:
    On first run the bridge creates and persona-primes its own Aside session.
    Text the bot; you should get a texting-style reply in a few seconds.
 
-5. **Optional, monitoring**: add an alias
-   `alias bridgemon="python3 /path/to/monitor.py"` to your shell rc.
-   `bridgemon` gives a live merged timeline (incoming messages, every CLI
-   invocation, every tool call the agent makes, per-turn cost) plus a
-   single-key kill switch (`k` stops the bridge AND any in-flight agent turn).
+5. **Optional, put `bridgemon` on your PATH** (one command for both
+   monitoring and deploying updates):
+   ```bash
+   mkdir -p ~/bin && ln -sf "$(pwd)/bridgemon.py" ~/bin/bridgemon
+   echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+   ```
+   - `bridgemon watch` -- live merged timeline (incoming messages, every CLI
+     invocation, every tool call the agent makes, per-turn cost) plus a
+     single-key kill switch (`k` stops the bridge AND any in-flight turn).
+     `bridgemon watch --status` / `--kill` / `--start` for one-shot use.
+   - `bridgemon update` -- pulls the latest bridge.py from this repo (if
+     you cloned it with git), syntax-checks it, restarts the service,
+     health-checks the restart, and auto-rolls-back to the last known-good
+     version if anything looks broken. Safe to run any time; refuses to
+     pull if you have uncommitted local edits instead of silently
+     discarding them.
+   - `bridgemon status` / `bridgemon logs [n]` / `bridgemon rollback` /
+     `bridgemon init` -- see `bridgemon` with no args for the full list.
+
+   Whoever clones this repo can pick up future improvements just by
+   running `bridgemon update` from inside their checkout.
 
 6. **Optional, proactivity**: create an Aside routine (cheap/fast model
    category recommended) with a prompt like:
@@ -113,6 +129,14 @@ Three layers:
 Every normal turn runs at `default_effort` (default `high`) regardless of the selected model. Both knobs live in `config.json` and accept `off`, `minimal`, `low`, `medium`, `high`, or `xhigh`.
 | `/usage` | Claude subscription usage (5h/weekly %, reset times) + context-window fill + session cost |
 | `/new` | fresh persona-primed session (auto-granted full tool access) |
+
+## Style
+
+`config.json` has a `"style"` key: `"casual"` (default -- lowercase,
+texting-speak, dry wit) or `"formal"` (clean, professional, still plain
+text/no markdown). You can also fully override either preset with your own
+`"persona_prompt"` and `"style_tag"` keys. Takes effect on the next `/new`
+since the persona is baked into the session at creation time.
 
 `/usage` reads Anthropic's OAuth usage endpoint with the claude-code token
 Aside already stores locally; if your Aside uses a different provider, that
@@ -166,7 +190,8 @@ section silently degrades and the rest still works.
 | file | purpose |
 |---|---|
 | `bridge.py` | the daemon (poller + worker + streaming) |
-| `monitor.py` | `bridgemon` live monitor + kill switch |
+| `bridgemon.py` | the `bridgemon` CLI: deploy/update/rollback + `watch` (delegates to monitor.py) |
+| `monitor.py` | live monitor + kill switch, run via `bridgemon watch` |
 | `config.example.json` | copy to `config.json`, fill in |
 | `com.aside.telegram-bridge.plist` | launchd template |
 
