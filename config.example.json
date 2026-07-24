@@ -3,6 +3,8 @@
  "chat_id": 123456789,
  "owner_name": "yourname",
  "default_model": "claude-sonnet-5",
+ "default_effort": "high",
+ "think_effort": "xhigh",
  "session_id": "",
  "aside_cli": "~/.aside/cli/Aside CLI.app/Contents/MacOS/aside",
  "sessions_dir": "~/.aside/u/0/sessions",

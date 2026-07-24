@@ -108,7 +108,9 @@ Three layers:
 |---|---|
 | `/status` | model, session, agent busy/idle, queue depth (answers instantly, even mid-task) |
 | `/model sonnet\|fable\|opus\|<raw id>` | switch model for subsequent turns |
-| `/think` | high thinking effort for the next message only |
+| `/think` | `think_effort` (default `xhigh`) thinking effort for the next message only |
+
+Every normal turn runs at `default_effort` (default `high`) regardless of the selected model. Both knobs live in `config.json` and accept `off`, `minimal`, `low`, `medium`, `high`, or `xhigh`.
 | `/usage` | Claude subscription usage (5h/weekly %, reset times) + context-window fill + session cost |
 | `/new` | fresh persona-primed session (auto-granted full tool access) |
 

@@ -124,6 +124,12 @@ state.setdefault("offset", 0)
 state.setdefault("model", CONFIG.get("default_model", "claude-sonnet-5"))
 state.setdefault("session_id", CONFIG.get("session_id") or None)
 state.setdefault("effort_next", None)
+
+# every normal turn runs at this thinking effort regardless of model;
+# /think bumps the next turn to think_effort. valid values:
+# off | minimal | low | medium | high | xhigh
+DEFAULT_EFFORT = CONFIG.get("default_effort", "high")
+THINK_EFFORT = CONFIG.get("think_effort", "xhigh")
 state.setdefault("pending", None)
 
 
@@ -409,10 +415,10 @@ def handle_command(text):
         send_text("hey, i'm alive. text me anything.")
     elif cmd == "/status":
         send_text(
-            "model: %s\nsession: %s\neffort bump queued: %s\n"
+            "model: %s\nsession: %s\neffort next turn: %s\n"
             "agent: %s\nqueue: %d waiting"
             % (state["model"], state["session_id"],
-               state["effort_next"] or "no",
+               state["effort_next"] or DEFAULT_EFFORT + " (default)",
                "mid-task" if WORKER_BUSY.is_set() else "idle",
                TASKS.qsize())
         )
@@ -431,9 +437,9 @@ def handle_command(text):
         if WORKER_BUSY.is_set():
             send_text("mid-task, will check usage right after")
     elif cmd == "/think":
-        state["effort_next"] = "high"
+        state["effort_next"] = THINK_EFFORT
         save_json(STATE_PATH, state)
-        send_text("ok, thinking hard on the next one")
+        send_text("ok, max thinking on the next one")
     elif cmd == "/new":
         TASKS.put(("cmd", "/new"))
         if WORKER_BUSY.is_set():
@@ -604,8 +610,8 @@ def handle_message(text):
     if msg_file and os.path.exists(msg_file):
         offset = os.path.getsize(msg_file)
 
-    effort = state["effort_next"]
-    if effort:
+    effort = state["effort_next"] or DEFAULT_EFFORT
+    if state["effort_next"]:
         state["effort_next"] = None
         save_json(STATE_PATH, state)
 
