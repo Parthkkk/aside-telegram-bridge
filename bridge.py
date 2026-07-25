@@ -282,16 +282,21 @@ def send_bubbles(text):
     if not bubbles:
         return
     log("REPLY %d bubble(s), %d chars" % (len(bubbles), len(text)))
-    for b in bubbles:
+    last_i = len(bubbles) - 1
+    for i, b in enumerate(bubbles):
         m = MD_IMAGE_RE.match(b)
         local_path = _resolve_local_path(m.group(2)) if m else None
         if m and local_path and local_path.lower().endswith(IMAGE_EXTS):
             if send_photo(local_path, caption=m.group(1)):
-                time.sleep(0.6)
+                if i != last_i:
+                    time.sleep(0.6)
                 continue
             log("send_photo failed, falling back to text for: %s" % b)
         send_text(b)
-        time.sleep(0.6)
+        if i != last_i:
+            time.sleep(0.6)  # only pace *between* bubbles, not after
+            # the last one -- nothing benefits from spacing after the
+            # final message, and it only adds pure tail latency.
 
 
 class Typing:
@@ -1264,6 +1269,22 @@ def handle_message(text):
         msg_file = session_msg_file(state["session_id"])
     offset, s = stream_new(msg_file, offset, turn)
     sent_any = sent_any or s
+    # The underlying aside session is done the instant the subprocess
+    # above returns -- everything left (turn.finish()'s collapse edit
+    # and the final reply's bubble-by-bubble sends, each paced ~0.6s
+    # apart) is pure Telegram delivery mechanics with zero bearing on
+    # whether the session can accept a new prompt. Clearing here
+    # (instead of waiting for this whole function to return, which is
+    # what the worker loop's own finally-block clear does) stops a
+    # quick follow-up message from getting a false "still mid-task,
+    # queued" notice while we're just finishing sending bubbles the
+    # user can already see arriving -- this was the main source of
+    # the "it says queued even though it clearly finished" reports,
+    # worse the more bubbles a reply has (i.e. the longer/more
+    # detailed the reply, which tends to grow with conversation
+    # length).
+    WORKER_BUSY.clear()
+    QUEUED_NOTE_SENT.clear()
     turn.finish()
 
     if not sent_any:
@@ -1448,6 +1469,7 @@ def main():
                 if WORKER_BUSY.is_set() and \
                         not QUEUED_NOTE_SENT.is_set():
                     QUEUED_NOTE_SENT.set()
+                    log("queued-notice sent (worker busy on arrival)")
                     tg_send_status(
                         "\U0001f4e5 got it -- i'm mid-task, "
                         "queued for right after")
