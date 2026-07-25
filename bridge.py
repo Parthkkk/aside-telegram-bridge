@@ -387,7 +387,7 @@ def newest_session_id(exclude, must_contain=None, newer_than=0):
                 mf = os.path.join(path, "messages.jsonl")
                 try:
                     with open(mf) as f:
-                        if must_contain not in f.read():
+                        if must_contain.lower() not in f.read().lower():
                             continue
                 except OSError:
                     continue
