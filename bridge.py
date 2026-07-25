@@ -25,8 +25,8 @@ MEDIA_DIR = os.path.join(BRIDGE_DIR, "media")
 
 TG_LIMIT = 4000  # telegram hard cap is 4096
 
-# style presets -- pick with config.json's "style" key ("casual" default,
-# or "formal"). either can be fully overridden with explicit
+# style presets -- pick with config.json's "style" key ("formal" default,
+# or "casual"). either can be fully overridden with explicit
 # "persona_prompt" / "style_tag" keys regardless of preset.
 STYLE_PRESETS = {
     "casual": {
@@ -86,7 +86,7 @@ STYLE_PRESETS = {
 }
 
 def _style_preset(name):
-    return STYLE_PRESETS.get(name, STYLE_PRESETS["casual"])
+    return STYLE_PRESETS.get(name, STYLE_PRESETS["formal"])
 
 STATE_LOCK = threading.Lock()
 
@@ -145,7 +145,7 @@ CONFIG = load_json(CONFIG_PATH, None)
 if not CONFIG:
     sys.exit("config.json missing")
 
-STYLE_NAME = CONFIG.get("style", "casual")
+STYLE_NAME = CONFIG.get("style", "formal")
 _PRESET = _style_preset(STYLE_NAME)
 DEFAULT_PERSONA = _PRESET["persona"]
 STYLE_TAG = CONFIG.get("style_tag") or _PRESET["tag"]

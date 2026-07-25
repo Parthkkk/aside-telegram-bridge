@@ -32,7 +32,19 @@ LOG_PATH = os.path.join(BRIDGE_DIR, "bridge.log")
 ERR_LOG_PATH = os.path.join(BRIDGE_DIR, "launchd.err.log")
 BACKUP_DIR = os.path.join(BRIDGE_DIR, "backups")
 LAST_GOOD = os.path.join(BACKUP_DIR, "last-good.py")
-LABEL = "com.saiamartya.aside-telegram-bridge"
+def _detect_label():
+    """Support both the public label (setup.py installs) and legacy
+    per-user labels from older manual installs."""
+    agents = os.path.expanduser("~/Library/LaunchAgents")
+    candidates = ["com.aside.telegram-bridge",
+                  "com.saiamartya.aside-telegram-bridge"]
+    for c in candidates:
+        if os.path.exists(os.path.join(agents, c + ".plist")):
+            return c
+    return candidates[0]
+
+
+LABEL = _detect_label()
 
 HEALTH_WAIT_S = 6
 HEALTH_POLL_S = 1.5
