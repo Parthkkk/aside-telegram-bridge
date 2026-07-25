@@ -185,6 +185,10 @@ def tg(method, params=None, timeout=65):
         return json.load(r)
 
 
+def html_escape(s):
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def send_text(text):
     text = text.strip()
     if not text:
@@ -521,6 +525,173 @@ def handle_usage():
     send_bubbles("\n\n".join(bubbles))
 
 
+# --- /sessions: list + switch between past aside sessions ---
+SESSIONS_LIST_LIMIT = int(CONFIG.get("sessions_list_limit", 8))
+
+
+def _session_preview(msg_file):
+    """(first-user-text snippet, turn count) from a transcript."""
+    snippet, turns, fallback = "", 0, ""
+    try:
+        with open(msg_file) as f:
+            for line in f:
+                try:
+                    m = json.loads(line)
+                except ValueError:
+                    continue
+                if m.get("role") != "user":
+                    continue
+                turns += 1
+                if snippet:
+                    continue
+                c = m.get("content")
+                text = ""
+                if isinstance(c, list):
+                    for part in c:
+                        if isinstance(part, dict) and \
+                                part.get("type") == "text":
+                            text = part.get("text", "")
+                            break
+                elif isinstance(c, str):
+                    text = c
+                if not text:
+                    continue
+                # persona seeds all look identical; prefer the first
+                # real message so previews actually differ
+                if "permanent telegram thread" in text.lower():
+                    fallback = fallback or text
+                    continue
+                snippet = text
+    except OSError:
+        pass
+    snippet = snippet or fallback
+    idx = snippet.lower().find("[bridge note")
+    if idx > 0:
+        snippet = snippet[:idx]
+    snippet = " ".join(snippet.split())
+    if len(snippet) > 64:
+        snippet = snippet[:64] + "\u2026"
+    return snippet, turns
+
+
+def list_sessions():
+    """Most recent sessions, newest first.
+    Returns [(sid, date, mtime, snippet, turns)]."""
+    rows = []
+    try:
+        for name in os.listdir(SESSIONS_DIR):
+            path = os.path.join(SESSIONS_DIR, name)
+            if not os.path.isdir(path) or "_" not in name:
+                continue
+            mf = os.path.join(path, "messages.jsonl")
+            if not os.path.isfile(mf):
+                continue
+            date, sid = name.rsplit("_", 1)
+            rows.append((sid, date, os.path.getmtime(path), mf))
+    except OSError:
+        return []
+    rows.sort(key=lambda r: r[2], reverse=True)
+    out = []
+    for sid, date, mtime, mf in rows[:SESSIONS_LIST_LIMIT]:
+        snippet, turns = _session_preview(mf)
+        out.append((sid, date, mtime, snippet or "(no messages)", turns))
+    return out
+
+
+def handle_sessions_cmd():
+    rows = list_sessions()
+    if not rows:
+        send_text("no sessions found on disk")
+        return
+    lines = []
+    buttons = []
+    for i, (sid, date, _mt, snippet, turns) in enumerate(rows, 1):
+        cur = " \u2b50" if sid == state["session_id"] else ""
+        lines.append("%d. %s \u00b7 %d turn%s%s\n   %s"
+                     % (i, date, turns,
+                        "" if turns == 1 else "s", cur, snippet))
+        label = "%d%s" % (i, " \u2b50" if cur else "")
+        buttons.append({"text": label,
+                        "callback_data": "sess:" + sid})
+    keyboard = [buttons[i:i + 4] for i in range(0, len(buttons), 4)]
+    keyboard.append([{"text": "cancel", "callback_data": "sess:cancel"}])
+    try:
+        tg("sendMessage", {
+            "chat_id": CHAT_ID,
+            "text": "recent sessions (tap to switch):\n\n"
+                    + "\n".join(lines),
+            "reply_markup": json.dumps({"inline_keyboard": keyboard}),
+        }, timeout=30)
+    except Exception as e:  # noqa: BLE001
+        log("sessions list send failed: %s" % e)
+        send_text("couldn't send the session list, check the log")
+
+
+def _grant_full_access(sid):
+    try:
+        subprocess.run(
+            [ASIDE_CLI, "repl",
+             "aside.sessions.update('%s', "
+             "{ permissionMode: 'full-access' })" % sid],
+            capture_output=True, timeout=30)
+        log("granted full-access to %s" % sid)
+    except Exception as e:  # noqa: BLE001
+        log("full-access grant failed: %s" % e)
+
+
+def switch_session(sid):
+    if not session_msg_file(sid):
+        send_text("can't find that session on disk anymore")
+        return
+    if sid == state["session_id"]:
+        send_text("already on that session")
+        return
+    state["session_id"] = sid
+    save_json(STATE_PATH, state)
+    # older sessions may still be in guard mode; make sure we can act
+    threading.Thread(target=_grant_full_access, args=(sid,),
+                     daemon=True).start()
+    note = "switched to session %s -- context picks up where it " \
+           "left off" % sid
+    if WORKER_BUSY.is_set():
+        note += "\n\n(heads up: a task from the old session is still " \
+                "finishing; new messages go to this one)"
+    send_text(note)
+
+
+def handle_callback(cq):
+    cq_id = cq.get("id")
+    frm = (cq.get("from") or {}).get("id")
+    data = cq.get("data") or ""
+    try:
+        tg("answerCallbackQuery", {"callback_query_id": cq_id},
+           timeout=15)
+    except Exception:  # noqa: BLE001
+        pass
+    if frm != CHAT_ID:
+        log("ignored callback from user %s" % frm)
+        return
+    msg = cq.get("message") or {}
+    mid = msg.get("message_id")
+    if not data.startswith("sess:"):
+        return
+    target = data[5:]
+    # retire the picker so buttons can't be double-tapped
+    if mid:
+        try:
+            tg("editMessageReplyMarkup",
+               {"chat_id": CHAT_ID, "message_id": mid,
+                "reply_markup": json.dumps({"inline_keyboard": []})},
+               timeout=15)
+        except Exception:  # noqa: BLE001
+            pass
+    if target == "cancel":
+        send_text("ok, staying put")
+        return
+    log("SESSION switch via picker -> %s" % target)
+    switch_session(target)
+
+
 # --- task queue between poller and worker ---
 TASKS = queue.Queue()
 WORKER_BUSY = threading.Event()
@@ -567,8 +738,18 @@ def handle_command(text):
         TASKS.put(("cmd", "/new"))
         if WORKER_BUSY.is_set():
             send_text("mid-task, will spin up the fresh session after")
+    elif cmd == "/sessions":
+        if arg:
+            # /sessions <n> or /sessions <session id>
+            rows = list_sessions()
+            if arg.isdigit() and 1 <= int(arg) <= len(rows):
+                switch_session(rows[int(arg) - 1][0])
+            else:
+                switch_session(parts[1])
+        else:
+            handle_sessions_cmd()
     else:
-        send_text("commands: /status /usage /model /think /new")
+        send_text("commands: /status /usage /model /think /new /sessions")
 
 
 def heavy_new():
@@ -616,12 +797,16 @@ def tg_send_status(text):
         return None
 
 
-def tg_edit(mid, text):
+def tg_edit(mid, text, parse_mode=None):
+    params = {"chat_id": CHAT_ID, "message_id": mid,
+              "text": text[:TG_LIMIT]}
+    if parse_mode:
+        params["parse_mode"] = parse_mode
     try:
-        tg("editMessageText", {"chat_id": CHAT_ID, "message_id": mid,
-                               "text": text[:TG_LIMIT]}, timeout=30)
+        r = tg("editMessageText", params, timeout=30)
+        return bool(r.get("ok"))
     except Exception:  # noqa: BLE001
-        pass
+        return False
 
 
 def tg_delete(mid):
@@ -638,13 +823,24 @@ URGENT_RE = re.compile(
     r"waiting on you|resend|heads up", re.I)
 
 
+def _fmt_elapsed(secs):
+    secs = int(secs)
+    if secs < 60:
+        return "%ds" % secs
+    return "%dm%02ds" % (secs // 60, secs % 60)
+
+
 class TurnStream:
     """Routes mid-turn assistant text.
 
     - first block (ack) and urgent/question blocks -> real messages
-    - other narration -> ONE silent status message, edited in place
-    - on finish: status message deleted; final block sent as real
-      bubbles if it only went through the status path
+    - other narration -> ONE silent status message, edited in place,
+      showing elapsed time + update count + latest note
+    - on finish: the status message collapses into a Telegram
+      expandable blockquote holding the whole worklog (like the
+      aside app's "thought for N mins" fold); tap to expand.
+      final block still lands as real bubbles if it was only ever
+      shown via the status path.
     """
 
     def __init__(self):
@@ -656,6 +852,17 @@ class TurnStream:
         self.last_block = None
         self.last_was_real = False
         self.suppressed = 0
+        self.t0 = time.time()
+        self.worklog = []  # (elapsed_secs, text) of folded updates
+
+    def _status_line(self):
+        head = "\u23f3 working \u00b7 %s \u00b7 %d update%s" % (
+            _fmt_elapsed(time.time() - self.t0), self.suppressed,
+            "" if self.suppressed == 1 else "s")
+        body = (self.status_text or "").strip()
+        if len(body) > 500:
+            body = body[:500] + "\u2026"
+        return head + ("\n\n" + body if body else "")
 
     def on_block(self, text):
         self.last_block = text
@@ -668,26 +875,57 @@ class TurnStream:
         self.status_text = text
         self.dirty = True
         self.suppressed += 1
+        self.worklog.append((time.time() - self.t0, text))
         self.flush()
 
     def flush(self):
+        if self.status_id is not None and not self.dirty:
+            # keep the elapsed timer ticking even without new text
+            if time.time() - self.last_edit >= 15.0:
+                tg_edit(self.status_id, self._status_line())
+                self.last_edit = time.time()
+            return
         if not self.dirty or self.status_text is None:
             return
         now_ts = time.time()
         if self.status_id is None:
-            self.status_id = tg_send_status(
-                "\u23f3 " + self.status_text)
+            self.status_id = tg_send_status(self._status_line())
             self.last_edit = now_ts
             self.dirty = self.status_id is None
         elif now_ts - self.last_edit >= 3.0:
-            tg_edit(self.status_id, "\u23f3 " + self.status_text)
+            tg_edit(self.status_id, self._status_line())
             self.last_edit = now_ts
             self.dirty = False
 
+    def _collapse(self):
+        """Fold the worklog into an expandable blockquote (HTML)."""
+        head = "\U0001f9e0 worked %s \u00b7 %d folded update%s" % (
+            _fmt_elapsed(time.time() - self.t0), self.suppressed,
+            "" if self.suppressed == 1 else "s")
+        # skip the final block if it's about to be re-sent as real
+        entries = self.worklog
+        if entries and not self.last_was_real and \
+                entries[-1][1] == self.last_block:
+            entries = entries[:-1]
+        if not entries:
+            return tg_delete(self.status_id) or True
+        lines = ["[%s] %s" % (_fmt_elapsed(el), tx.strip())
+                 for el, tx in entries]
+        body = html_escape("\n\n".join(lines))
+        budget = TG_LIMIT - len(head) - 80
+        if len(body) > budget:
+            body = "\u2026" + body[-budget:]
+        html = "%s\n<blockquote expandable>%s</blockquote>" % (
+            html_escape(head), body)
+        if not tg_edit(self.status_id, html, parse_mode="HTML"):
+            # fallback: old behavior, just remove the status line
+            tg_delete(self.status_id)
+        return True
+
     def finish(self):
         if self.status_id:
-            tg_delete(self.status_id)
-            log("STATUS line: %d update(s) folded, deleted"
+            self._collapse()
+            log("STATUS line: %d update(s) folded into blockquote"
                 % self.suppressed)
         if self.last_block and not self.last_was_real:
             send_bubbles(self.last_block)
@@ -844,7 +1082,8 @@ def main():
             res = tg("getUpdates", {
                 "offset": state["offset"],
                 "timeout": 50,
-                "allowed_updates": json.dumps(["message"]),
+                "allowed_updates": json.dumps(
+                    ["message", "callback_query"]),
             })
             backoff = 1
         except Exception as e:  # noqa: BLE001
@@ -866,6 +1105,12 @@ def main():
         save_json(STATE_PATH, state)
 
         for u in updates:
+            if u.get("callback_query"):
+                try:
+                    handle_callback(u["callback_query"])
+                except Exception as e:  # noqa: BLE001
+                    log("callback error: %s" % e)
+                continue
             m = u.get("message") or {}
             if (m.get("chat") or {}).get("id") != CHAT_ID:
                 if m:

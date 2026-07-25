@@ -25,8 +25,11 @@ aside: drafted a reply, want to see it before i send?
 ```
 
 - Replies are short, lowercase, multi-bubble, plain text. No markdown walls.
-- Long tasks stream: an ack, ONE silently-updating status message
-  (deleted when done), real pings only for questions/blockers/results.
+- Long tasks stream: an ack, ONE silently-updating status message (live
+  elapsed timer + latest note), real pings only for
+  questions/blockers/results. When the turn ends the status message
+  collapses into a tap-to-expand blockquote holding the whole worklog --
+  Telegram's closest thing to a native "thought for 4 mins" fold.
 - Send a photo and the agent opens and looks at it.
 - Messages sent while it's working get a silent "queued" receipt and run next.
 - `/status` answers instantly even mid-task.
@@ -129,6 +132,7 @@ Three layers:
 Every normal turn runs at `default_effort` (default `high`) regardless of the selected model. Both knobs live in `config.json` and accept `off`, `minimal`, `low`, `medium`, `high`, or `xhigh`.
 | `/usage` | Claude subscription usage (5h/weekly %, reset times) + context-window fill + session cost |
 | `/new` | fresh persona-primed session (auto-granted full tool access) |
+| `/sessions` | list recent Aside sessions (date, turn count, first-message preview) with tap-to-switch inline buttons; `/sessions <n>` or `/sessions <session id>` switches directly. Switched-to sessions are auto-granted full tool access. `sessions_list_limit` in `config.json` controls list length (default 8) |
 
 ## Style
 
@@ -177,9 +181,13 @@ section silently degrades and the rest still works.
 - **Serial by design.** One turn at a time, adjacent messages batch into one
   turn. Simple, predictable, no session races.
 - **Status folding**: Telegram can't collapse "thought for 4 mins" like a
-  native UI, so the bridge fakes it: narration goes into one
-  notification-silent message edited in place, deleted when the turn ends.
-  History keeps ack → blockers/questions → result.
+  native UI, so the bridge approximates it: narration goes into one
+  notification-silent message edited in place (elapsed timer + update
+  count + latest note). When the turn ends, that message is edited into a
+  collapsed `<blockquote expandable>` containing the full timestamped
+  worklog -- tap to expand, ignore otherwise. History keeps ack →
+  blockers/questions → folded worklog → result. If the HTML edit is ever
+  rejected the bridge falls back to deleting the status message.
 - **macOS only** as written (launchd, Aside's file layout). The Telegram and
   transcript logic is portable if someone wants to PR Linux support.
 - The reply source of truth is the session's `messages.jsonl`, not CLI
