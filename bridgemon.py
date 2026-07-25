@@ -247,12 +247,26 @@ def _git_pull():
     fetch = _git("fetch", "origin", branch)
     if fetch.returncode != 0:
         return False, "git fetch failed: %s" % fetch.stderr.strip()[:200]
-    reset = _git("reset", "--hard", "origin/%s" % branch)
+    target = "origin/%s" % branch
+    remote_head = _git("rev-parse", target).stdout.strip()
+    if before == remote_head:
+        return False, "already up to date (%s)" % before[:8]
+    # refuse a hard reset if it would discard real local commits --
+    # e.g. work committed here but not yet pushed. Only fast-forward
+    # (local HEAD must already be an ancestor of the remote branch).
+    ff_check = _git("merge-base", "--is-ancestor", "HEAD", target)
+    if ff_check.returncode != 0:
+        ahead = _git("rev-list", "--count",
+                     "%s..HEAD" % target).stdout.strip()
+        return False, (
+            "local HEAD has %s commit(s) not on %s -- refusing to "
+            "reset (would discard them). push your local commits "
+            "first, then rerun update" % (ahead or "some", target)
+        )
+    reset = _git("reset", "--hard", target)
     if reset.returncode != 0:
         return False, "git reset failed: %s" % reset.stderr.strip()[:200]
     after = _git("rev-parse", "HEAD").stdout.strip()
-    if before == after:
-        return False, "already up to date (%s)" % after[:8]
     return True, "pulled %s..%s" % (before[:8], after[:8])
 
 
