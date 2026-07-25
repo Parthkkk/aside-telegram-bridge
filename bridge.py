@@ -853,16 +853,32 @@ class TurnStream:
         self.last_was_real = False
         self.suppressed = 0
         self.t0 = time.time()
-        self.worklog = []  # (elapsed_secs, text) of folded updates
+        self.worklog = []  # (elapsed_secs, text) of folded entries
+        self.last_tool = None
 
     def _status_line(self):
-        head = "\u23f3 working \u00b7 %s \u00b7 %d update%s" % (
-            _fmt_elapsed(time.time() - self.t0), self.suppressed,
-            "" if self.suppressed == 1 else "s")
+        n = len(self.worklog)
+        head = "\u23f3 working \u00b7 %s \u00b7 %d step%s" % (
+            _fmt_elapsed(time.time() - self.t0), n,
+            "" if n == 1 else "s")
         body = (self.status_text or "").strip()
         if len(body) > 500:
             body = body[:500] + "\u2026"
         return head + ("\n\n" + body if body else "")
+
+    def on_tool(self, label):
+        """A tool call happened; show it and log it, silently."""
+        label = " ".join((label or "").split())
+        if not label or label == self.last_tool:
+            return
+        self.last_tool = label
+        if len(label) > 120:
+            label = label[:120] + "\u2026"
+        entry = "\u2699\ufe0f " + label
+        self.worklog.append((time.time() - self.t0, entry))
+        self.status_text = entry
+        self.dirty = True
+        self.flush()
 
     def on_block(self, text):
         self.last_block = text
@@ -877,6 +893,9 @@ class TurnStream:
         self.suppressed += 1
         self.worklog.append((time.time() - self.t0, text))
         self.flush()
+
+    def has_status(self):
+        return self.status_id is not None
 
     def flush(self):
         if self.status_id is not None and not self.dirty:
@@ -899,9 +918,6 @@ class TurnStream:
 
     def _collapse(self):
         """Fold the worklog into an expandable blockquote (HTML)."""
-        head = "\U0001f9e0 worked %s \u00b7 %d folded update%s" % (
-            _fmt_elapsed(time.time() - self.t0), self.suppressed,
-            "" if self.suppressed == 1 else "s")
         # skip the final block if it's about to be re-sent as real
         entries = self.worklog
         if entries and not self.last_was_real and \
@@ -909,6 +925,9 @@ class TurnStream:
             entries = entries[:-1]
         if not entries:
             return tg_delete(self.status_id) or True
+        head = "\U0001f9e0 worked %s \u00b7 %d step%s" % (
+            _fmt_elapsed(time.time() - self.t0), len(entries),
+            "" if len(entries) == 1 else "s")
         lines = ["[%s] %s" % (_fmt_elapsed(el), tx.strip())
                  for el, tx in entries]
         body = html_escape("\n\n".join(lines))
@@ -925,8 +944,8 @@ class TurnStream:
     def finish(self):
         if self.status_id:
             self._collapse()
-            log("STATUS line: %d update(s) folded into blockquote"
-                % self.suppressed)
+            log("STATUS line: %d entrie(s) folded into blockquote"
+                % len(self.worklog))
         if self.last_block and not self.last_was_real:
             send_bubbles(self.last_block)
             self.last_was_real = True
@@ -958,10 +977,16 @@ def stream_new(msg_file, pos, turn):
         if m.get("role") != "assistant":
             continue
         for part in m.get("content", []):
-            if isinstance(part, dict) and part.get("type") == "text" \
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text" \
                     and part.get("text", "").strip():
                 turn.on_block(part["text"])
                 saw = True
+            elif part.get("type") == "toolCall":
+                args = part.get("arguments") or {}
+                label = args.get("title") or part.get("name") or ""
+                turn.on_tool(label)
     return pos + consumed, saw
 
 
