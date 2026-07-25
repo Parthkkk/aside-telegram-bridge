@@ -170,8 +170,9 @@ state.setdefault("session_id", CONFIG.get("session_id") or None)
 state.setdefault("effort_next", None)
 
 # every normal turn runs at this thinking effort regardless of model.
-# /effort lets you pick any of these for the next turn only, same
-# menu as the aside browser's effort selector:
+# /effort lets you pick any of these; the choice is sticky and applies
+# to every following turn until changed. same menu as the aside
+# browser's effort selector:
 EFFORT_LEVELS = ["off", "minimal", "low", "medium", "high",
                 "xhigh", "ultrabrowse"]
 DEFAULT_EFFORT = CONFIG.get("default_effort", "high")
@@ -634,7 +635,7 @@ def handle_sessions_cmd():
 
 def send_effort_picker():
     """Inline keyboard mirroring the aside browser's effort selector,
-    off through ultrabrowse. Tapping one sets effort_next."""
+    off through ultrabrowse. Tapping one sets the sticky effort."""
     current = state["effort_next"] or DEFAULT_EFFORT
     buttons = []
     for lvl in EFFORT_LEVELS:
@@ -645,7 +646,7 @@ def send_effort_picker():
     try:
         tg("sendMessage", {
             "chat_id": CHAT_ID,
-            "text": "pick thinking effort for the next message "
+            "text": "pick thinking effort (sticky until changed) "
                     "(current: %s):" % current,
             "reply_markup": json.dumps({"inline_keyboard": keyboard}),
         }, timeout=30)
@@ -719,7 +720,7 @@ def handle_callback(cq):
         state["effort_next"] = level
         save_json(STATE_PATH, state)
         log("EFFORT set via picker -> %s" % level)
-        send_text("ok, next turn runs at effort: %s" % level)
+        send_text("ok, effort set to %s (sticky until changed)" % level)
         return
     target = data[5:]
     if target == "cancel":
@@ -746,7 +747,7 @@ def handle_command(text):
         send_text("hey, i'm alive. text me anything.")
     elif cmd == "/status":
         send_text(
-            "model: %s\nsession: %s\neffort next turn: %s\n"
+            "model: %s\nsession: %s\neffort: %s\n"
             "agent: %s\nqueue: %d waiting"
             % (state["model"], state["session_id"],
                state["effort_next"] or DEFAULT_EFFORT + " (default)",
@@ -771,7 +772,7 @@ def handle_command(text):
         if arg and arg in EFFORT_LEVELS:
             state["effort_next"] = arg
             save_json(STATE_PATH, state)
-            send_text("ok, next turn runs at effort: %s" % arg)
+            send_text("ok, effort set to %s (sticky until changed)" % arg)
         elif arg:
             send_text("not a real effort level. pick one: " +
                       ", ".join(EFFORT_LEVELS))
@@ -1237,9 +1238,6 @@ def handle_message(text):
         offset = os.path.getsize(msg_file)
 
     effort = state["effort_next"] or DEFAULT_EFFORT
-    if state["effort_next"]:
-        state["effort_next"] = None
-        save_json(STATE_PATH, state)
 
     result = {}
 
