@@ -32,12 +32,50 @@ LOG_PATH = os.path.join(BRIDGE_DIR, "bridge.log")
 ERR_LOG_PATH = os.path.join(BRIDGE_DIR, "launchd.err.log")
 BACKUP_DIR = os.path.join(BRIDGE_DIR, "backups")
 LAST_GOOD = os.path.join(BACKUP_DIR, "last-good.py")
+def _uid():
+    return os.getuid()
+
+
+def _label_is_loaded(label):
+    """True only if launchd actually knows about this label right
+    now -- a plist *file* existing on disk means nothing if it was
+    never bootstrapped (or was later booted out), which is exactly
+    what caused a false 'not running' / bad auto-rollback before."""
+    r = subprocess.run(
+        ["launchctl", "print", "gui/%d/%s" % (_uid(), label)],
+        capture_output=True, text=True)
+    return r.returncode == 0
+
+
 def _detect_label():
     """Support both the public label (setup.py installs) and legacy
-    per-user labels from older manual installs."""
+    per-user labels from older manual installs. Always trust launchd's
+    live registry over plist files on disk -- a stale/unused plist
+    file (e.g. left over from a reinstall, or written but never
+    bootstrapped) must never be picked over the label that's actually
+    running the bridge."""
     agents = os.path.expanduser("~/Library/LaunchAgents")
     candidates = ["com.aside.telegram-bridge",
                   "com.saiamartya.aside-telegram-bridge"]
+
+    loaded = [c for c in candidates if _label_is_loaded(c)]
+    if len(loaded) == 1:
+        return loaded[0]
+    if len(loaded) > 1:
+        # both registered (e.g. mid-migration) -- prefer whichever
+        # actually has a live pid, so a dead/leftover registration
+        # doesn't win over the real running one.
+        for c in loaded:
+            r = subprocess.run(
+                ["launchctl", "print", "gui/%d/%s" % (_uid(), c)],
+                capture_output=True, text=True)
+            if "pid = " in r.stdout:
+                return c
+        return loaded[0]
+
+    # nothing loaded yet (fresh install, or bridge currently stopped) --
+    # fall back to whichever plist file exists on disk so `watch --start`
+    # and friends still target the right label.
     for c in candidates:
         if os.path.exists(os.path.join(agents, c + ".plist")):
             return c
@@ -48,10 +86,6 @@ LABEL = _detect_label()
 
 HEALTH_WAIT_S = 6
 HEALTH_POLL_S = 1.5
-
-
-def _uid():
-    return os.getuid()
 
 
 def _launchctl(*args):
