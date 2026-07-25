@@ -45,6 +45,12 @@ aside: Drafted a reply. Want to see it before I send?
 - Long tasks: one ack, one live status line (elapsed time + current step),
   then the result. When it finishes, the status line collapses into a
   tap-to-expand worklog of everything it did.
+- Subagents get their own live roster inside that status line: each
+  spawned subagent shows as a row (running/done/failed, elapsed time,
+  and a one-line snippet of its result once it finishes), so parallel
+  or background research doesn't just disappear into a generic
+  "subagent_wait" tool call. The full history (spawn -> wait -> result
+  per subagent) is preserved in the tap-to-expand worklog too.
 - Send a photo and the agent opens and looks at it.
 - Messages sent mid-task queue politely and run next.
 
@@ -54,7 +60,8 @@ aside: Drafted a reply. Want to see it before I send?
 |---|---|
 | `/status` | model, session, busy/idle, queue (instant, even mid-task) |
 | `/model sonnet\|fable\|opus` | switch model |
-| `/think` | max thinking effort for the next message |
+| `/effort` | pick thinking effort for the next message (inline buttons: off, minimal, low, medium, high, xhigh, ultrabrowse -- same levels as the aside browser) |
+| `/effort <level>` | set it directly without the button menu |
 | `/usage` | Claude subscription usage + context-window fill + cost |
 | `/new` | fresh persona-primed session |
 | `/sessions` | list recent Aside sessions, tap a button to switch into one |
@@ -165,8 +172,9 @@ paths corrected, and `launchctl bootstrap gui/$(id -u) <plist>`.
 Style: `config.json`'s `"style"` is `"formal"` (default) or `"casual"`;
 you can fully override with your own `"persona_prompt"` / `"style_tag"`.
 Persona changes take effect on the next `/new` since it's baked in at
-session creation. Effort knobs: `default_effort` (default `high`) and
-`think_effort` (default `xhigh`).
+session creation. `default_effort` (default `high`) sets the thinking
+effort every normal turn runs at; use `/effort` in chat to bump a single
+upcoming turn to any level (off through ultrabrowse).
 
 </details>
 

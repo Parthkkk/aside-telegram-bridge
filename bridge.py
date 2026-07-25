@@ -168,11 +168,12 @@ state.setdefault("model", CONFIG.get("default_model", "claude-sonnet-5"))
 state.setdefault("session_id", CONFIG.get("session_id") or None)
 state.setdefault("effort_next", None)
 
-# every normal turn runs at this thinking effort regardless of model;
-# /think bumps the next turn to think_effort. valid values:
-# off | minimal | low | medium | high | xhigh
+# every normal turn runs at this thinking effort regardless of model.
+# /effort lets you pick any of these for the next turn only, same
+# menu as the aside browser's effort selector:
+EFFORT_LEVELS = ["off", "minimal", "low", "medium", "high",
+                "xhigh", "ultrabrowse"]
 DEFAULT_EFFORT = CONFIG.get("default_effort", "high")
-THINK_EFFORT = CONFIG.get("think_effort", "xhigh")
 state.setdefault("pending", None)
 
 
@@ -625,6 +626,28 @@ def handle_sessions_cmd():
         send_text("couldn't send the session list, check the log")
 
 
+def send_effort_picker():
+    """Inline keyboard mirroring the aside browser's effort selector,
+    off through ultrabrowse. Tapping one sets effort_next."""
+    current = state["effort_next"] or DEFAULT_EFFORT
+    buttons = []
+    for lvl in EFFORT_LEVELS:
+        label = lvl + (" \u2b50" if lvl == current else "")
+        buttons.append({"text": label, "callback_data": "eff:" + lvl})
+    keyboard = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    keyboard.append([{"text": "cancel", "callback_data": "eff:cancel"}])
+    try:
+        tg("sendMessage", {
+            "chat_id": CHAT_ID,
+            "text": "pick thinking effort for the next message "
+                    "(current: %s):" % current,
+            "reply_markup": json.dumps({"inline_keyboard": keyboard}),
+        }, timeout=30)
+    except Exception as e:  # noqa: BLE001
+        log("effort picker send failed: %s" % e)
+        send_text("couldn't send the effort picker, check the log")
+
+
 def _grant_full_access(sid):
     try:
         subprocess.run(
@@ -671,9 +694,8 @@ def handle_callback(cq):
         return
     msg = cq.get("message") or {}
     mid = msg.get("message_id")
-    if not data.startswith("sess:"):
+    if not (data.startswith("sess:") or data.startswith("eff:")):
         return
-    target = data[5:]
     # retire the picker so buttons can't be double-tapped
     if mid:
         try:
@@ -683,6 +705,17 @@ def handle_callback(cq):
                timeout=15)
         except Exception:  # noqa: BLE001
             pass
+    if data.startswith("eff:"):
+        level = data[4:]
+        if level == "cancel":
+            send_text("ok, staying put")
+            return
+        state["effort_next"] = level
+        save_json(STATE_PATH, state)
+        log("EFFORT set via picker -> %s" % level)
+        send_text("ok, next turn runs at effort: %s" % level)
+        return
+    target = data[5:]
     if target == "cancel":
         send_text("ok, staying put")
         return
@@ -728,10 +761,16 @@ def handle_command(text):
         TASKS.put(("cmd", "/usage"))
         if WORKER_BUSY.is_set():
             send_text("mid-task, will check usage right after")
-    elif cmd == "/think":
-        state["effort_next"] = THINK_EFFORT
-        save_json(STATE_PATH, state)
-        send_text("ok, max thinking on the next one")
+    elif cmd == "/effort":
+        if arg and arg in EFFORT_LEVELS:
+            state["effort_next"] = arg
+            save_json(STATE_PATH, state)
+            send_text("ok, next turn runs at effort: %s" % arg)
+        elif arg:
+            send_text("not a real effort level. pick one: " +
+                      ", ".join(EFFORT_LEVELS))
+        else:
+            send_effort_picker()
     elif cmd == "/new":
         TASKS.put(("cmd", "/new"))
         if WORKER_BUSY.is_set():
@@ -747,7 +786,7 @@ def handle_command(text):
         else:
             handle_sessions_cmd()
     else:
-        send_text("commands: /status /usage /model /think /new /sessions")
+        send_text("commands: /status /usage /model /effort /new /sessions")
 
 
 def heavy_new():
@@ -825,6 +864,13 @@ URGENT_PHRASE_RE = re.compile(
     r"heads up|do you want|should i\b|let me know", re.I)
 YOU_RE = re.compile(r"\byou\b|\byour\b|\byours\b", re.I)
 
+# parses subagent_wait's toolResult text, which embeds one
+# <subagent_result task_id="...">...</subagent_result> block per
+# finished task.
+SUBAGENT_RESULT_RE = re.compile(
+    r'<subagent_result task_id="([^"]+)">(.*?)</subagent_result>',
+    re.S)
+
 
 def is_urgent(text):
     if URGENT_PHRASE_RE.search(text):
@@ -864,6 +910,10 @@ class TurnStream:
         self.t0 = time.time()
         self.worklog = []  # (elapsed_secs, text) of folded entries
         self.last_tool = None
+        # subagents: key is task_id once known, else the toolCallId.
+        # each value: {desc, profile, status, start, done_at, snippet}
+        self.subagents = {}
+        self.subagent_order = []  # keys in first-seen order
 
     def _status_line(self):
         n = len(self.worklog)
@@ -873,7 +923,110 @@ class TurnStream:
         body = (self.status_text or "").strip()
         if len(body) > 500:
             body = body[:500] + "\u2026"
-        return head + ("\n\n" + body if body else "")
+        roster = self._subagent_roster()
+        return head + ("\n\n" + body if body else "") + \
+            ("\n\n" + roster if roster else "")
+
+    def _subagent_roster(self):
+        """Live-updating roster of subagents for this turn, shown
+        under the main status line so parallel/background work isn't
+        invisible while it's running."""
+        if not self.subagent_order:
+            return ""
+        lines = ["\U0001f9e9 subagents:"]
+        for key in self.subagent_order:
+            sa = self.subagents[key]
+            elapsed = _fmt_elapsed(
+                (sa.get("done_at") or time.time()) - sa["start"])
+            if sa["status"] == "running":
+                icon = "\u23f3"
+            elif sa["status"] == "error":
+                icon = "\u274c"
+            else:
+                icon = "\u2705"
+            desc = sa["desc"]
+            if len(desc) > 60:
+                desc = desc[:60] + "\u2026"
+            line = " %s %s (%s)" % (icon, desc, elapsed)
+            if sa.get("snippet"):
+                line += "\n    \u21b3 %s" % sa["snippet"]
+            lines.append(line)
+        return "\n".join(lines)
+
+    def on_subagent_spawn(self, call_id, args):
+        """A `subagent` toolCall with action=spawn just fired."""
+        if not call_id:
+            return
+        desc = (args.get("description") or args.get("prompt") or
+                "subagent").strip()
+        desc = " ".join(desc.split())
+        profile = args.get("subagent_profile") or "default"
+        bg = bool(args.get("run_in_background"))
+        self.subagents[call_id] = {
+            "desc": desc, "profile": profile, "status": "running",
+            "start": time.time(), "done_at": None, "snippet": None,
+            "bg": bg,
+        }
+        self.subagent_order.append(call_id)
+        tag = " (background)" if bg else ""
+        entry = "\U0001f9e9 spawned subagent [%s]%s: %s" % (
+            profile, tag, desc)
+        self.worklog.append((time.time() - self.t0, entry))
+        self.status_text = entry
+        self.dirty = True
+        self.flush()
+
+    def on_subagent_taskid(self, call_id, task_id):
+        """Rekey a spawn entry from its toolCallId to the real
+        task_id once the spawn toolResult reports one, so later
+        subagent_wait/result events (which only carry task_id) can
+        find the same roster entry."""
+        if not task_id or call_id not in self.subagents:
+            return
+        if task_id == call_id:
+            return
+        self.subagents[task_id] = self.subagents.pop(call_id)
+        idx = self.subagent_order.index(call_id)
+        self.subagent_order[idx] = task_id
+        self.dirty = True
+        self.flush()
+
+    def on_subagent_wait(self, task_ids):
+        """A subagent_wait toolCall fired for these task_ids."""
+        names = []
+        for tid in task_ids or []:
+            sa = self.subagents.get(tid)
+            names.append(sa["desc"] if sa else tid)
+        if not names:
+            return
+        entry = "\u23f3 waiting on subagent%s: %s" % (
+            "" if len(names) == 1 else "s", ", ".join(names))
+        self.worklog.append((time.time() - self.t0, entry))
+        self.status_text = entry
+        self.dirty = True
+        self.flush()
+
+    def on_subagent_result(self, task_id, text, is_error):
+        """A subagent_wait toolResult resolved one task_id."""
+        sa = self.subagents.get(task_id)
+        if sa is None:
+            sa = {"desc": task_id, "profile": "default",
+                 "status": "running", "start": time.time(),
+                 "done_at": None, "snippet": None, "bg": False}
+            self.subagents[task_id] = sa
+            self.subagent_order.append(task_id)
+        sa["status"] = "error" if is_error else "done"
+        sa["done_at"] = time.time()
+        snippet = " ".join((text or "").split())
+        if len(snippet) > 180:
+            snippet = snippet[:180] + "\u2026"
+        sa["snippet"] = snippet
+        icon = "\u274c failed" if is_error else "\u2705 done"
+        entry = "%s: %s -- %s" % (icon, sa["desc"], snippet)
+        self.worklog.append((time.time() - self.t0, entry))
+        self.status_text = entry
+        self.dirty = True
+        self.flush()
 
     def on_tool(self, label):
         """A tool call happened; show it and log it, silently."""
@@ -983,19 +1136,46 @@ def stream_new(msg_file, pos, turn):
             m = json.loads(raw.decode("utf-8", "replace"))
         except ValueError:
             continue
-        if m.get("role") != "assistant":
-            continue
-        for part in m.get("content", []):
-            if not isinstance(part, dict):
-                continue
-            if part.get("type") == "text" \
-                    and part.get("text", "").strip():
-                turn.on_block(part["text"])
-                saw = True
-            elif part.get("type") == "toolCall":
-                args = part.get("arguments") or {}
-                label = args.get("title") or part.get("name") or ""
-                turn.on_tool(label)
+        role = m.get("role")
+        if role == "assistant":
+            for part in m.get("content", []):
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "text" \
+                        and part.get("text", "").strip():
+                    turn.on_block(part["text"])
+                    saw = True
+                elif part.get("type") == "toolCall":
+                    name = part.get("name") or ""
+                    args = part.get("arguments") or {}
+                    if name == "subagent" and \
+                            args.get("action") == "spawn":
+                        turn.on_subagent_spawn(part.get("id"), args)
+                    elif name == "subagent_wait":
+                        turn.on_subagent_wait(args.get("task_ids"))
+                    else:
+                        label = args.get("title") or name
+                        turn.on_tool(label)
+        elif role == "toolResult":
+            tool_name = m.get("toolName")
+            if tool_name == "subagent":
+                details = m.get("details") or {}
+                task_id = details.get("taskId")
+                turn.on_subagent_taskid(m.get("toolCallId"), task_id)
+            elif tool_name == "subagent_wait":
+                text = "\n".join(
+                    p.get("text", "") for p in m.get("content", [])
+                    if isinstance(p, dict) and p.get("type") == "text")
+                call_error = bool(m.get("isError"))
+                found = SUBAGENT_RESULT_RE.findall(text)
+                if found:
+                    for task_id, body in found:
+                        turn.on_subagent_result(
+                            task_id, body.strip(), call_error)
+                elif text.strip():
+                    turn.on_subagent_result(
+                        m.get("toolCallId") or "subagent",
+                        text.strip(), call_error)
     return pos + consumed, saw
 
 

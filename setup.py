@@ -197,7 +197,7 @@ def register_bot_commands(token):
         {"command": "status", "description": "model, session, queue"},
         {"command": "usage", "description": "usage + context fill"},
         {"command": "model", "description": "switch model"},
-        {"command": "think", "description": "max thinking next turn"},
+        {"command": "effort", "description": "pick thinking effort"},
         {"command": "new", "description": "fresh session"},
         {"command": "sessions", "description": "list/switch sessions"},
     ]
