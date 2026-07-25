@@ -9,6 +9,7 @@ import json
 import os
 import queue
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -899,7 +900,14 @@ class TurnStream:
     """
 
     def __init__(self):
-        self.first_sent = False
+        # "pending": we've seen at most one text block so far and
+        # haven't decided yet whether this is a quick one-shot reply
+        # or the start of a longer multi-step task. "multi": at least
+        # one tool call or a second block has happened, so everything
+        # non-urgent folds until the true final answer.
+        self.turn_mode = "pending"
+        self.pending_block = None
+        self.pending_elapsed = 0.0
         self.status_id = None
         self.status_text = None
         self.dirty = False
@@ -957,6 +965,7 @@ class TurnStream:
         """A `subagent` toolCall with action=spawn just fired."""
         if not call_id:
             return
+        self._enter_multi()
         desc = (args.get("description") or args.get("prompt") or
                 "subagent").strip()
         desc = " ".join(desc.split())
@@ -999,6 +1008,7 @@ class TurnStream:
             names.append(sa["desc"] if sa else tid)
         if not names:
             return
+        self._enter_multi()
         entry = "\u23f3 waiting on subagent%s: %s" % (
             "" if len(names) == 1 else "s", ", ".join(names))
         self.worklog.append((time.time() - self.t0, entry))
@@ -1008,6 +1018,7 @@ class TurnStream:
 
     def on_subagent_result(self, task_id, text, is_error):
         """A subagent_wait toolResult resolved one task_id."""
+        self._enter_multi()
         sa = self.subagents.get(task_id)
         if sa is None:
             sa = {"desc": task_id, "profile": "default",
@@ -1028,11 +1039,28 @@ class TurnStream:
         self.dirty = True
         self.flush()
 
+    def _enter_multi(self):
+        """Switch from 'might be a quick one-shot reply' to 'this is
+        a real multi-step task' mode. If a first text block was
+        already buffered waiting to see what happens next, it gets
+        folded into the worklog now instead of ever having been sent
+        as a standalone 'ack' bubble -- only urgent blocks and the
+        true final answer are ever sent as real messages."""
+        if self.turn_mode == "multi":
+            return
+        self.turn_mode = "multi"
+        if self.pending_block is not None:
+            self.worklog.append((self.pending_elapsed, self.pending_block))
+            self.status_text = self.pending_block
+            self.dirty = True
+            self.pending_block = None
+
     def on_tool(self, label):
         """A tool call happened; show it and log it, silently."""
         label = " ".join((label or "").split())
         if not label or label == self.last_tool:
             return
+        self._enter_multi()  # a tool call always means multi-step
         self.last_tool = label
         if len(label) > 120:
             label = label[:120] + "\u2026"
@@ -1044,11 +1072,23 @@ class TurnStream:
 
     def on_block(self, text):
         self.last_block = text
-        if not self.first_sent or is_urgent(text):
-            self.first_sent = True
+        if is_urgent(text):
+            self._enter_multi()
             self.last_was_real = True
             send_bubbles(text)
             return
+        if self.turn_mode == "pending" and self.pending_block is None:
+            # first non-urgent block of the turn: buffer it silently
+            # instead of sending it as an ack. If nothing else
+            # happens, finish() sends it as the (only) real reply. If
+            # more work follows, _enter_multi() folds it into the
+            # worklog instead -- so only the true final summary ever
+            # lands as a standalone message on a multi-step task.
+            self.pending_block = text
+            self.pending_elapsed = time.time() - self.t0
+            self.last_was_real = False
+            return
+        self._enter_multi()
         self.last_was_real = False
         self.status_text = text
         self.dirty = True
@@ -1104,6 +1144,12 @@ class TurnStream:
         return True
 
     def finish(self):
+        if self.turn_mode == "pending" and self.pending_block is not None:
+            # simple one-shot reply: nothing else ever happened, so
+            # no status message was ever shown -- just send it.
+            send_bubbles(self.pending_block)
+            self.last_was_real = True
+            return
         if self.status_id:
             self._collapse()
             log("STATUS line: %d entrie(s) folded into blockquote"
@@ -1273,9 +1319,47 @@ def worker_loop():
                 QUEUED_NOTE_SENT.clear()
 
 
+def _reap_stale_exec(session_id):
+    """Kill any leftover 'aside exec --session <sid>' process still
+    running from before this restart.
+
+    Without this, a restart while a turn is still mid-flight (crash,
+    KeepAlive relaunch, an operator running bridgemon/kickstart while
+    busy, etc.) leaves the old CLI subprocess orphaned and running,
+    while startup's pending-message recovery below queues a *second*
+    run of the exact same message. Both then drive (or silently
+    view) the same session concurrently, each with its own
+    TurnStream -- which is what produced the multiple broken/reset
+    'working...' status bubbles and stray unfolded narration bubbles
+    seen in practice. Reaping first guarantees a single owner before
+    any recovery re-queue happens.
+    """
+    if not session_id:
+        return
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", "aside exec --session %s " % session_id],
+            capture_output=True, text=True)
+        pids = [p for p in out.stdout.split() if p.isdigit()]
+        for pid in pids:
+            if int(pid) == os.getpid():
+                continue
+            log("reaping stale exec pid=%s for session=%s (leftover "
+                "from a restart mid-turn)" % (pid, session_id))
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        if pids:
+            time.sleep(1)
+    except Exception as e:  # noqa: BLE001
+        log("stale-exec reap check failed: %s" % e)
+
+
 def main():
     log("bridge starting. session=%s model=%s owner=%s"
         % (state["session_id"], state["model"], OWNER))
+    _reap_stale_exec(state.get("session_id"))
     # recover a message that was received but not fully processed
     if state.get("pending"):
         log("recovering pending message")
