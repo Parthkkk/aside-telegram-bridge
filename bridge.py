@@ -49,11 +49,25 @@ STYLE_PRESETS = {
             "go -- it won't spam me. if something genuinely needs my "
             "attention (a decision, approval, or you're blocked), "
             "address me directly so it stands out. end longer tasks "
-            "with one clear final summary. sound good? one line ack."
+            "with one clear final summary. approval protocol: for any "
+            "irreversible or external action (sending an email or "
+            "message, making a payment, deleting data, posting "
+            "publicly, or any outside side effect), don't act and "
+            "don't use any browser confirmation tool. instead, stop "
+            "and post an approval request as your entire final message "
+            "in exactly this format:\n[[APPROVAL]]\nAction: <one "
+            "line>\nDetails: <specifics>\n[[/APPROVAL]]\nthen wait -- "
+            "i'll tap approve or deny on my phone and you'll get my "
+            "decision as the next message before proceeding. sound "
+            "good? one line ack."
         ),
         "tag": (
             "\n\n[bridge note: telegram thread. texting style, plain "
-            "text only, short bubbles split by blank lines]"
+            "text only, short bubbles split by blank lines. for any "
+            "irreversible/external action, don't act yet: post an "
+            "approval request as your final message using exactly "
+            "[[APPROVAL]] / Action: / Details: / [[/APPROVAL]], then "
+            "wait for my approve or deny]"
         ),
     },
     "formal": {
@@ -76,12 +90,25 @@ STYLE_PRESETS = {
             "something genuinely needs my attention (a decision, an "
             "approval, or you are blocked), address me directly so it "
             "stands out. End longer tasks with one clear final "
-            "summary. Understood? Please confirm briefly."
+            "summary. Approval protocol: for any irreversible or "
+            "external action (sending an email or message, making a "
+            "payment, deleting data, posting publicly, or any outside "
+            "side effect), do not act and do not use any browser "
+            "confirmation tool. Instead, stop and post an approval "
+            "request as your entire final message in exactly this "
+            "format:\n[[APPROVAL]]\nAction: <one line>\nDetails: "
+            "<specifics>\n[[/APPROVAL]]\nThen wait -- I will tap "
+            "Approve or Deny on my phone and you will get my decision "
+            "as the next message before proceeding. Understood? "
+            "Please confirm briefly."
         ),
         "tag": (
             "\n\n[bridge note: Telegram thread. Professional tone, "
             "plain text only, short message bubbles split by blank "
-            "lines.]"
+            "lines. For any irreversible/external action, do not act "
+            "yet: post an approval request as your final message using "
+            "exactly [[APPROVAL]] / Action: / Details: / [[/APPROVAL]], "
+            "then wait for my Approve or Deny.]"
         ),
     },
 }
@@ -168,6 +195,9 @@ state.setdefault("offset", 0)
 state.setdefault("model", CONFIG.get("default_model", "claude-sonnet-5"))
 state.setdefault("session_id", CONFIG.get("session_id") or None)
 state.setdefault("effort_next", None)
+# pending approval-gate request awaiting an Approve/Deny tap, or None.
+# shape: {token, action, details, session_id, message_id, ts}
+state.setdefault("approval", None)
 
 # every normal turn runs at this thinking effort regardless of model.
 # /effort lets you pick any of these; the choice is sticky and applies
@@ -687,6 +717,43 @@ def switch_session(sid):
     send_text(note)
 
 
+def _handle_approval_tap(data, mid):
+    parts = (data.split(":", 2) + ["", ""])[:3]
+    verdict, token = parts[1], parts[2]
+    ap = state.get("approval")
+    if not ap or ap.get("token") != token:
+        if mid:
+            tg("editMessageReplyMarkup",
+               {"chat_id": CHAT_ID, "message_id": mid,
+                "reply_markup": json.dumps({"inline_keyboard": []})},
+               timeout=15)
+        send_text("that approval request isn't active anymore")
+        return
+    approved = verdict == "approve"
+    action = ap.get("action") or "the proposed action"
+    if mid:
+        head = "\u2705 Approved" if approved else "\U0001f6ab Denied"
+        tg("editMessageText",
+           {"chat_id": CHAT_ID, "message_id": mid,
+            "text": (head + " -- " + action)[:TG_LIMIT]}, timeout=15)
+    state["approval"] = None
+    save_json(STATE_PATH, state)
+    log("APPROVAL %s token=%s" % (verdict, token))
+    if approved:
+        inject = ("[APPROVAL GRANTED by %s] I approve the action you "
+                  "proposed (%s). Proceed and carry it out now."
+                  % (OWNER, action))
+    else:
+        inject = ("[APPROVAL DENIED by %s] I did not approve the action "
+                  "you proposed (%s). Do not perform it. Acknowledge "
+                  "briefly and stand by." % (OWNER, action))
+    TASKS.put(("msg", inject))
+    if WORKER_BUSY.is_set() and not QUEUED_NOTE_SENT.is_set():
+        QUEUED_NOTE_SENT.set()
+        tg_send_status("\U0001f4e5 got it -- queued for right after "
+                       "the current task")
+
+
 def handle_callback(cq):
     cq_id = cq.get("id")
     frm = (cq.get("from") or {}).get("id")
@@ -701,6 +768,9 @@ def handle_callback(cq):
         return
     msg = cq.get("message") or {}
     mid = msg.get("message_id")
+    if data.startswith("apv:"):
+        _handle_approval_tap(data, mid)
+        return
     if not (data.startswith("sess:") or data.startswith("eff:")):
         return
     # retire the picker so buttons can't be double-tapped
@@ -885,6 +955,71 @@ def is_urgent(text):
     return "?" in text and bool(YOU_RE.search(text))
 
 
+# --- approval gate ---------------------------------------------------
+# The agent emits a [[APPROVAL]] ... [[/APPROVAL]] block as its final
+# message before any irreversible/external action. The bridge turns
+# that into an inline Approve/Deny keyboard on the phone; the tapped
+# verdict is injected back as the next turn so the agent proceeds or
+# aborts. This is the Telegram-native answer to browser confirmation
+# popups (which can't be resolved from the bridge -- the daemon's
+# resolve path is behind a keychain-derived auth token).
+APPROVAL_RE = re.compile(
+    r"\[\[APPROVAL\]\](.*?)\[\[/APPROVAL\]\]", re.S | re.I)
+
+
+def parse_approval(text):
+    """Extract an approval request from a turn's assistant text.
+    Returns {action, details, raw} or None."""
+    m = APPROVAL_RE.search(text or "")
+    if not m:
+        return None
+    body = m.group(1).strip()
+    action, details = "", ""
+    for line in body.splitlines():
+        ls = line.strip()
+        low = ls.lower()
+        if low.startswith("action:"):
+            action = ls.split(":", 1)[1].strip()
+        elif low.startswith("details:"):
+            details = ls.split(":", 1)[1].strip()
+    if not action:
+        action = body[:300]
+    return {"action": action, "details": details, "raw": body}
+
+
+def present_approval(ap):
+    """Send the Approve/Deny inline keyboard and record pending state."""
+    token = os.urandom(6).hex()
+    lines = ["\U0001f510 Approval needed", "", "Action: " + ap["action"]]
+    if ap["details"]:
+        lines += ["Details: " + ap["details"]]
+    lines += ["", "Tap Approve to proceed, or Deny to cancel."]
+    keyboard = [[
+        {"text": "\u2705 Approve", "callback_data": "apv:approve:" + token},
+        {"text": "\U0001f6ab Deny", "callback_data": "apv:deny:" + token},
+    ]]
+    mid = None
+    try:
+        r = tg("sendMessage", {
+            "chat_id": CHAT_ID,
+            "text": "\n".join(lines)[:TG_LIMIT],
+            "reply_markup": json.dumps({"inline_keyboard": keyboard}),
+        }, timeout=30)
+        mid = (r.get("result") or {}).get("message_id")
+    except Exception as e:  # noqa: BLE001
+        log("approval send failed: %s" % e)
+        send_text("i need your approval but couldn't send the buttons; "
+                  "reply APPROVE or DENY:\n\n" + ap["action"])
+    state["approval"] = {
+        "token": token, "action": ap["action"], "details": ap["details"],
+        "session_id": state["session_id"], "message_id": mid,
+        "ts": time.time(),
+    }
+    save_json(STATE_PATH, state)
+    log("APPROVAL requested token=%s action=%s"
+        % (token, ap["action"][:60]))
+
+
 def _fmt_elapsed(secs):
     secs = int(secs)
     if secs < 60:
@@ -928,6 +1063,13 @@ class TurnStream:
         # each value: {desc, profile, status, start, done_at, snippet}
         self.subagents = {}
         self.subagent_order = []  # keys in first-seen order
+        # when set, finish() folds the worklog but does NOT re-send the
+        # final text block (used when the final block is an approval
+        # request that gets its own buttoned message instead).
+        self.suppress_final = False
+        # one-time notice if the agent used the browser confirmation
+        # tool (which the bridge can't resolve from Telegram).
+        self.native_confirm_notified = False
 
     def _status_line(self):
         n = len(self.worklog)
@@ -1149,18 +1291,35 @@ class TurnStream:
             tg_delete(self.status_id)
         return True
 
+    def on_native_confirmation(self, args):
+        """The agent called the browser confirmation tool despite the
+        approval-gate protocol. We can't resolve that from Telegram
+        (daemon auth is keychain-gated), so notify once and point at
+        the app / the [[APPROVAL]] path."""
+        if self.native_confirm_notified:
+            return
+        self.native_confirm_notified = True
+        title = (args.get("title") or "Confirmation").strip()
+        send_text(
+            "\u26a0\ufe0f i triggered a browser-level confirmation "
+            "(\"%s\") which can't be answered from telegram. approve "
+            "it in the aside app this once -- and next time i'll use "
+            "the telegram approval buttons instead." % title[:120])
+
     def finish(self):
         if self.turn_mode == "pending" and self.pending_block is not None:
             # simple one-shot reply: nothing else ever happened, so
             # no status message was ever shown -- just send it.
-            send_bubbles(self.pending_block)
-            self.last_was_real = True
+            if not self.suppress_final:
+                send_bubbles(self.pending_block)
+                self.last_was_real = True
             return
         if self.status_id:
             self._collapse()
             log("STATUS line: %d entrie(s) folded into blockquote"
                 % len(self.worklog))
-        if self.last_block and not self.last_was_real:
+        if self.last_block and not self.last_was_real \
+                and not self.suppress_final:
             send_bubbles(self.last_block)
             self.last_was_real = True
 
@@ -1205,6 +1364,8 @@ def stream_new(msg_file, pos, turn):
                         turn.on_subagent_spawn(part.get("id"), args)
                     elif name == "subagent_wait":
                         turn.on_subagent_wait(args.get("task_ids"))
+                    elif name == "request_action_confirmation":
+                        turn.on_native_confirmation(args)
                     else:
                         label = args.get("title") or name
                         turn.on_tool(label)
@@ -1236,6 +1397,7 @@ def handle_message(text):
     offset = 0
     if msg_file and os.path.exists(msg_file):
         offset = os.path.getsize(msg_file)
+    orig_offset = offset
 
     effort = state["effort_next"] or DEFAULT_EFFORT
 
@@ -1281,11 +1443,22 @@ def handle_message(text):
     # worse the more bubbles a reply has (i.e. the longer/more
     # detailed the reply, which tends to grow with conversation
     # length).
+    # detect an approval-gate request in this turn's assistant output
+    # so its final block becomes buttons instead of a plain reply.
+    approval = None
+    if msg_file:
+        approval = parse_approval(
+            read_assistant_since(msg_file, orig_offset))
+    if approval:
+        turn.suppress_final = True
+
     WORKER_BUSY.clear()
     QUEUED_NOTE_SENT.clear()
     turn.finish()
 
-    if not sent_any:
+    if approval:
+        present_approval(approval)
+    elif not sent_any:
         if out.strip():
             send_bubbles(out.strip())
         elif code != 0:
