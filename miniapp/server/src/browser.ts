@@ -163,8 +163,6 @@ export interface CaptureResult {
   capturedAt: number;
 }
 
-const MIN_WIDTH = 240;
-const MAX_WIDTH = 1600;
 const MIN_QUALITY = 10;
 const MAX_QUALITY = 100;
 
@@ -182,10 +180,14 @@ function clamp(value: number, min: number, max: number): number {
  * Deliberately does not touch viewport size. This is the owner's REAL,
  * already-open browser window on their REAL machine -- resizing it on
  * every phone-initiated capture would be visibly disruptive on the desktop
- * they are sitting in front of. `width` only affects the client's request
- * intent (documented on the route), not anything sent to Playwright here;
- * resizing for a requested capture width is a resampling job for whoever
- * renders the WebP, not this module.
+ * they are sitting in front of.
+ *
+ * There is therefore NO width parameter, and the route does not accept one.
+ * An earlier draft exported MIN_WIDTH/MAX_WIDTH for a `?w=` the route never
+ * read; that was dead code and is gone. Downscaling would need a resampler
+ * (`sharp` is not a dependency here and is not worth adding for this), so
+ * the size lever that actually exists is `quality`. The client scales with
+ * CSS at render time.
  */
 export async function captureTab(
   cache: FacadeCache,
@@ -206,41 +208,77 @@ export async function captureTab(
   return { base64: record.base64, url: record.url || '', capturedAt: Date.now() };
 }
 
+/** Floor between two captures of the same tab. */
+export const CAPTURE_TAB_FLOOR_MS = 2_000;
+/** Rolling window for the global ceiling. */
+export const CAPTURE_WINDOW_MS = 60_000;
+/** Captures allowed per rolling window, across ALL tabs. */
+export const CAPTURE_WINDOW_MAX = 40;
+
 /**
- * Enforces the plan's 7.3 capture discipline: one concurrent capture
- * GLOBALLY (every capture spawns a 139MB process; two at once is exactly
- * the thrash risk the plan names), and a 2s floor between captures of the
- * SAME tab (Watch Mode's own interval is >= 3s, so this only ever bites a
- * client polling faster than that, which is exactly what it should catch).
+ * Enforces capture discipline: one concurrent capture GLOBALLY (every
+ * capture spawns a 139MB process; two at once is exactly the thrash risk),
+ * a 2s floor between captures of the SAME tab, and a rolling global
+ * ceiling.
  *
- * A per-turn ceiling (100 captures) is a Watch Mode concept tied to a
- * running turn, not a tab -- that counter lives with whatever drives
- * Watch Mode (the route handler / a future watch-session tracker), not
- * here.
+ * The rolling ceiling is the fix for a gap the first cut of this file left
+ * open. The per-turn ceiling (100 captures) lived only in WatchMode.tsx,
+ * i.e. entirely client side, so nothing on the server bounded a client that
+ * was buggy, backgrounded, or simply left open. The per-tab floor does not
+ * close that: it is per TAB, so a client cycling several tabs slips past it,
+ * and concurrency-1 only serialises the work rather than limiting it. At
+ * ~670ms per capture that allowed a sustained ~89 processes/minute against
+ * an 8GB machine.
+ *
+ * 40 per 60s is deliberately generous against real use: Watch Mode's fastest
+ * cadence is 3s (20/min) and it backs off to 6s and 10s, leaving headroom for
+ * manual peeks on top. A runaway client is bounded to 40/min instead of ~89.
+ *
+ * All three limits are checked BEFORE the work starts, and the per-tab
+ * timestamp is recorded in `finally` rather than on success. Recording only
+ * on success meant a tab whose captures kept failing had no floor at all and
+ * could be retried as fast as the client asked, which is the exact condition
+ * under which retry storms happen.
  */
 export class CaptureGate {
   private lastByTab = new Map<string, number>();
+  private recent: number[] = [];
   private inFlight = false;
 
   constructor(private readonly now: () => number = Date.now) {}
 
+  /** Drop timestamps that have aged out of the rolling window. */
+  private prune(at: number): void {
+    const cutoff = at - CAPTURE_WINDOW_MS;
+    while (this.recent.length && this.recent[0] <= cutoff) this.recent.shift();
+  }
+
   async run<T>(targetId: string, fn: () => Promise<T>): Promise<T> {
+    const at = this.now();
     const last = this.lastByTab.get(targetId) ?? 0;
-    if (this.now() - last < 2_000) {
+    if (at - last < CAPTURE_TAB_FLOOR_MS) {
       throw new BrowserError('rate_limited', 'capture this tab again in a moment');
+    }
+    this.prune(at);
+    if (this.recent.length >= CAPTURE_WINDOW_MAX) {
+      throw new BrowserError(
+        'rate_limited',
+        'too many captures in the last minute; pausing to keep the Mac responsive',
+      );
     }
     if (this.inFlight) {
       throw new BrowserError('capture_busy', 'another capture is already running');
     }
+
     this.inFlight = true;
+    this.recent.push(at);
     try {
-      const result = await fn();
-      this.lastByTab.set(targetId, this.now());
-      return result;
+      return await fn();
     } finally {
+      // Both in `finally`: a failed capture must still hold the floor, or a
+      // erroring tab can be hammered with no throttle at all.
+      this.lastByTab.set(targetId, this.now());
       this.inFlight = false;
     }
   }
 }
-
-export { MIN_WIDTH, MAX_WIDTH };

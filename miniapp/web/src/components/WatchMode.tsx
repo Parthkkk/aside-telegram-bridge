@@ -8,6 +8,21 @@
  * `BROWSER_TOOL_HINTS` in `server/src/app.ts` exactly, so the client and
  * the server's own completion-thumbnail decision (plan 7.5) agree about
  * what counts.
+ *
+ * ONE capture per tick, rendered from the JSON response's base64.
+ *
+ * That is load-bearing. The first cut called `api.captureTab()` for the URL
+ * and THEN pointed the `<img>` at `api.captureUrl()`, which is a second,
+ * separate route -- and both go through `CaptureGate`. So every tick fired
+ * two captures back to back, the second one landed inside the gate's own 2s
+ * per-tab floor, and it came back 429. The image never loaded, and the card
+ * silently burned two ~139MB process spawns per tick to render nothing.
+ * Holding ~25-35KB of base64 in memory for one frame is the cheaper half of
+ * that trade by a wide margin.
+ *
+ * `PagePeek` is a different case and is correct as-is: it renders from
+ * `captureUrl` and never pairs it with a JSON capture, and `shareToStory`
+ * needs a real fetchable URL rather than a `data:` URL.
  */
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
@@ -97,7 +112,7 @@ export function WatchModeCard({
           const result = await api.captureTab(target.targetId, 55);
           if (cancelled) return;
           captureCount.current += 1;
-          setSrc(`${api.captureUrl(target.targetId)}&t=${Date.now()}`);
+          setSrc(result.dataUrl);
           setUrl(result.url);
           if (result.url === lastUrl.current) {
             sinceUrlChange += intervalMs.current;

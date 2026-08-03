@@ -259,7 +259,24 @@ export function makeTestEnv(
       delete process.env.MINIAPP_STATE_DB;
       delete process.env.MINIAPP_UPLOADS_DIR;
       delete process.env.MINIAPP_MEDIA_DIR;
-      fs.rmSync(root, { recursive: true, force: true });
+      // Retry the teardown. A test that exercises uploads can still have a
+      // write landing in this tree as the suite moves on, and rmSync then
+      // races it and throws ENOTEMPTY -- a harness failure that looks like a
+      // product bug. `force` suppresses missing paths, not a directory that
+      // regrew between readdir and rmdir, so the retry is the actual fix.
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          fs.rmSync(root, { recursive: true, force: true });
+          return;
+        } catch (err) {
+          if (attempt >= 4) {
+            // Never fail a passing test on temp-dir cleanup. The OS reaps it.
+            return;
+          }
+          const wait = Date.now() + 25;
+          while (Date.now() < wait);
+        }
+      }
     },
   };
 }
