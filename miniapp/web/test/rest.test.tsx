@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { RestCue, RestHero, greetingFor } from '../src/components/Rest';
+import { RestCue, RestHero, bandFor, greetingFor } from '../src/components/Rest';
 import { pillModelLabel } from '../src/utils/pills';
 import { threadErrorText } from '../src/utils/format';
 
@@ -17,33 +17,65 @@ function at(hour: number): Date {
 }
 
 describe('greetingFor', () => {
-  it('covers every hour of the day without a gap', () => {
+  it('covers every hour of the day, in every phrasing', () => {
     for (let hour = 0; hour < 24; hour += 1) {
-      expect(greetingFor('Alex', at(hour))).toBeTruthy();
+      for (let pick = 0; pick < 3; pick += 1) {
+        const text = greetingFor('Alex', at(hour), pick);
+        expect(text, `hour ${hour} pick ${pick}`).toBeTruthy();
+        expect(text).toContain('Alex');
+      }
     }
   });
 
   it('uses the late-night band before 5am', () => {
-    expect(greetingFor('Alex', at(1))).toBe('Up late, Alex?');
-    expect(greetingFor('Alex', at(4))).toBe('Up late, Alex?');
+    expect(greetingFor('Alex', at(1), 0)).toBe('Up late, Alex?');
+    expect(greetingFor('Alex', at(4), 0)).toBe('Up late, Alex?');
   });
 
   it('switches at each boundary', () => {
-    expect(greetingFor('Alex', at(5))).toBe('Early start, Alex');
-    expect(greetingFor('Alex', at(9))).toBe('Morning, Alex');
-    expect(greetingFor('Alex', at(12))).toBe('Afternoon, Alex');
-    expect(greetingFor('Alex', at(17))).toBe('Evening, Alex');
-    expect(greetingFor('Alex', at(21))).toBe('Still up, Alex?');
+    expect(greetingFor('Alex', at(5), 0)).toBe('Early start, Alex');
+    expect(greetingFor('Alex', at(9), 0)).toBe('Morning, Alex');
+    expect(greetingFor('Alex', at(12), 0)).toBe('Afternoon, Alex');
+    expect(greetingFor('Alex', at(17), 0)).toBe('Evening, Alex');
+    expect(greetingFor('Alex', at(21), 0)).toBe('Still up, Alex?');
+  });
+
+  it('offers more than one phrasing per band', () => {
+    // The whole point: one string per band meant every launch in the same
+    // stretch of hours produced a byte-identical screen.
+    for (const hour of [1, 7, 10, 14, 19, 22]) {
+      const seen = new Set(
+        [0, 1, 2].map((pick) => greetingFor('Alex', at(hour), pick)),
+      );
+      expect(seen.size, `hour ${hour}`).toBeGreaterThan(1);
+    }
   });
 
   it('drops the name cleanly when there is not one', () => {
-    // No dangling comma, and no "undefined" leaking onto the screen.
+    // No dangling comma, and no "undefined" on an otherwise empty screen.
     for (const name of [undefined, '', '   ']) {
-      const text = greetingFor(name, at(13));
-      expect(text).toBe('Good afternoon');
-      expect(text).not.toContain(',');
-      expect(text).not.toContain('undefined');
+      for (let pick = 0; pick < 3; pick += 1) {
+        const text = greetingFor(name, at(13), pick);
+        expect(text).not.toContain(',');
+        expect(text).not.toContain('undefined');
+        expect(text.trim()).toBe(text);
+      }
     }
+  });
+
+  it('takes any number as the pick without falling off the list', () => {
+    for (const pick of [-7, 0, 3, 99, 1.9, NaN, Infinity]) {
+      expect(greetingFor('Alex', at(13), pick)).toContain('Alex');
+    }
+  });
+});
+
+describe('bandFor', () => {
+  it('maps each hour to exactly one band, in order', () => {
+    const bands = Array.from({ length: 24 }, (_, h) => bandFor(at(h)));
+    expect(bands.every((b) => b >= 0)).toBe(true);
+    // Bands only ever move forward through the day.
+    expect([...bands].sort((a, b) => a - b)).toEqual(bands);
   });
 });
 

@@ -11,29 +11,111 @@
  * addresses the owner by name, and it is also the thing that makes an
  * otherwise empty screen feel deliberate rather than unloaded.
  */
+import { useMemo } from 'react';
 import { AsideSymbol } from './Brand';
 import { ChevronDown } from './Icons';
 
 /**
- * The greeting, by hour.
+ * The greetings, by hour band.
  *
- * Split into six bands rather than the usual three because the two that
- * matter most here are the edges: someone opening this at 01:00 and
- * someone opening it at 09:00 are not having the same day, and a flat
- * "Good morning" for both is the kind of copy that reads as generated.
+ * Six bands rather than the usual three because the edges are what matter
+ * here: someone opening this at 01:00 and someone opening it at 09:00 are
+ * not having the same day, and a flat "Good morning" for both reads as
+ * generated.
  *
- * Pure and exported so the bands are testable without mocking a clock.
+ * Several per band because there used to be exactly one, which meant every
+ * launch inside the same stretch of hours produced a byte-identical
+ * screen. A greeting that never varies stops being a greeting.
+ *
+ * `named` and `plain` are kept as separate strings rather than one
+ * template with the name spliced out: dropping a name from
+ * "Up late, %s?" by string surgery leaves a dangling comma, and every
+ * near-miss there is visible on an otherwise empty screen.
  */
-export function greetingFor(name: string | undefined, date: Date): string {
-  const who = (name || '').trim();
-  const hour = date.getHours();
+interface Greeting {
+  named: (who: string) => string;
+  plain: string;
+}
 
-  if (hour < 5) return who ? `Up late, ${who}?` : 'Up late?';
-  if (hour < 9) return who ? `Early start, ${who}` : 'Early start';
-  if (hour < 12) return who ? `Morning, ${who}` : 'Good morning';
-  if (hour < 17) return who ? `Afternoon, ${who}` : 'Good afternoon';
-  if (hour < 21) return who ? `Evening, ${who}` : 'Good evening';
-  return who ? `Still up, ${who}?` : 'Still up?';
+const BANDS: Array<{ until: number; options: Greeting[] }> = [
+  {
+    until: 5,
+    options: [
+      { named: (w) => `Up late, ${w}?`, plain: 'Up late?' },
+      { named: (w) => `Still awake, ${w}?`, plain: 'Still awake?' },
+      { named: (w) => `Late one, ${w}?`, plain: 'A late one?' },
+    ],
+  },
+  {
+    until: 9,
+    options: [
+      { named: (w) => `Early start, ${w}`, plain: 'Early start' },
+      { named: (w) => `You are up early, ${w}`, plain: 'Up early' },
+      { named: (w) => `Morning already, ${w}`, plain: 'Morning already' },
+    ],
+  },
+  {
+    until: 12,
+    options: [
+      { named: (w) => `Morning, ${w}`, plain: 'Good morning' },
+      { named: (w) => `Good morning, ${w}`, plain: 'Good morning' },
+      { named: (w) => `Hey, ${w}`, plain: 'Hey there' },
+    ],
+  },
+  {
+    until: 17,
+    options: [
+      { named: (w) => `Afternoon, ${w}`, plain: 'Good afternoon' },
+      { named: (w) => `Good afternoon, ${w}`, plain: 'Good afternoon' },
+      { named: (w) => `Hey, ${w}`, plain: 'Hey there' },
+    ],
+  },
+  {
+    until: 21,
+    options: [
+      { named: (w) => `Evening, ${w}`, plain: 'Good evening' },
+      { named: (w) => `Good evening, ${w}`, plain: 'Good evening' },
+      { named: (w) => `Hey, ${w}`, plain: 'Hey there' },
+    ],
+  },
+  {
+    until: 24,
+    options: [
+      { named: (w) => `Still up, ${w}?`, plain: 'Still up?' },
+      { named: (w) => `Evening, ${w}`, plain: 'Good evening' },
+      { named: (w) => `Late one, ${w}?`, plain: 'A late one?' },
+    ],
+  },
+];
+
+/** Which band an hour falls in. Exported so the bands are testable. */
+export function bandFor(date: Date): number {
+  const hour = date.getHours();
+  return BANDS.findIndex((b) => hour < b.until);
+}
+
+/**
+ * The greeting for a moment, optionally varied by `pick`.
+ *
+ * `pick` is any number; it is reduced into the band's options, so callers
+ * can pass a counter, a timestamp or a random value without knowing how
+ * many phrasings exist. Pure, so the bands and the nameless forms are
+ * asserted directly rather than eyeballed.
+ */
+export function greetingFor(
+  name: string | undefined,
+  date: Date,
+  pick = 0,
+): string {
+  const who = (name || '').trim();
+  const band = BANDS[bandFor(date)] ?? BANDS[BANDS.length - 1];
+  const options = band.options;
+  // Non-finite and negative values must still land on a real option.
+  const index = Number.isFinite(pick)
+    ? ((Math.trunc(pick) % options.length) + options.length) % options.length
+    : 0;
+  const choice = options[index];
+  return who ? choice.named(who) : choice.plain;
 }
 
 /**
@@ -44,10 +126,26 @@ export function greetingFor(name: string | undefined, date: Date): string {
  * is.
  */
 export function RestHero({ name }: { name?: string }) {
+  /*
+   * Chosen once per mount, not per render.
+   *
+   * The session list polls every 8s and re-renders this, so picking on
+   * each render would reshuffle the greeting under the reader every few
+   * seconds. Keyed by the band so crossing midnight while the app is open
+   * still moves it on.
+   */
+  const now = new Date();
+  const band = bandFor(now);
+  const pick = useMemo(
+    () => Math.floor(Math.random() * 3),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [band],
+  );
+
   return (
     <div className="rest-hero">
       <AsideSymbol size={38} className="rest-mark" />
-      <h1 className="rest-greeting">{greetingFor(name, new Date())}</h1>
+      <h1 className="rest-greeting">{greetingFor(name, now, pick)}</h1>
     </div>
   );
 }
