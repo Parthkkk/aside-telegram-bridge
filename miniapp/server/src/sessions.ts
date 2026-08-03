@@ -44,6 +44,13 @@ export interface SessionRow {
   /** readAt < updatedAt means the browser would show an unread dot. */
   unread: boolean;
   trigger?: string;
+  /**
+   * Suspended on a native question tool, or sitting on an answerable
+   * soft-marker question nobody has tapped yet. Filled in by the route,
+   * not by `listSessionRows` itself -- it needs `notifier`'s tracked
+   * state, which lives in app.ts alongside the WS's turn hooks (plan 6.4).
+   */
+  waiting?: boolean;
 }
 
 /** Session ids are opaque CLI tokens; anything else is not a session id. */

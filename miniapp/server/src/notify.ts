@@ -39,6 +39,15 @@ interface NotifyRecord {
   longRunningSentForTurn?: number;
   /** Epoch ms; notifications for this session are suppressed until then. */
   mutedUntil?: number;
+  /**
+   * True from the moment a soft-marker question is found pending at the
+   * tail of a finished turn, until the NEXT turn starts (a fresh
+   * `turn_started` always means the old question is no longer the live
+   * state, whether because it was answered or because something else
+   * moved the session on). Read by the session list route to sort
+   * "waiting" sessions to the top -- see plan 6.4.
+   */
+  blockedOnQuestion?: boolean;
 }
 
 function loadJson<T>(file: string, fallback: T): T {
@@ -182,7 +191,22 @@ export class Notifier {
     record.messageId = undefined;
     record.turnStartedAt = startedAt;
     record.longRunningSentForTurn = undefined;
+    record.blockedOnQuestion = false;
     this.persist();
+  }
+
+  /**
+   * Track "waiting on you" separately from whether a PUSH was actually
+   * sent for it -- a muted or foregrounded session is still genuinely
+   * waiting, it just did not interrupt anyone about it.
+   */
+  setWaiting(sessionId: string, waiting: boolean): void {
+    this.record(sessionId).blockedOnQuestion = waiting;
+    this.persist();
+  }
+
+  isWaiting(sessionId: string): boolean {
+    return Boolean(this.state[sessionId]?.blockedOnQuestion);
   }
 
   private deepLink(sessionId: string): string | null {

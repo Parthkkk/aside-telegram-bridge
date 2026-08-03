@@ -387,6 +387,7 @@ export async function buildServer(
             last.answerable &&
             last.questions[0]
           ) {
+            notifier.setWaiting(turn.sessionId, true);
             await notifier.notifyBlocked(notifySession, last.questions[0], last.id);
             return;
           }
@@ -515,7 +516,44 @@ export async function buildServer(
         limit,
         stateDb,
       );
-      return { sessions: rows, source };
+      // "Waiting on you": suspended on a native tool (the daemon's own
+      // status), or sitting on an answerable soft-marker question nobody
+      // has tapped (notifier's tracked state -- see the turn_finished
+      // hook above). Cheap either way: no extra transcript reads.
+      const sessions = rows.map((row) => ({
+        ...row,
+        waiting: isSuspended(row.status) || notifier.isWaiting(row.id),
+      }));
+      return { sessions, source };
+    },
+  );
+
+  /** Per-session mute for push notifications (plan 6.6). */
+  app.post(
+    '/api/sessions/:id/mute',
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (!isValidSessionId(id)) {
+        return reply.code(400).send({ error: 'bad_session_id' });
+      }
+      const body = (request.body || {}) as { hours?: number };
+      const hours = Math.min(Math.max(Number(body.hours) || 24, 1), 24 * 30);
+      notifier.mute(id, hours * 60 * 60 * 1000);
+      return { ok: true, mutedForHours: hours };
+    },
+  );
+
+  app.post(
+    '/api/sessions/:id/unmute',
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (!isValidSessionId(id)) {
+        return reply.code(400).send({ error: 'bad_session_id' });
+      }
+      notifier.unmute(id);
+      return { ok: true };
     },
   );
 
@@ -616,6 +654,8 @@ export async function buildServer(
         status,
         /** Blocked on a desktop-only question; see `isSuspended`. */
         suspended: isSuspended(status),
+        /** Push notifications silenced for this session -- see notify.ts. */
+        muted: notifier.isMuted(id),
         items: snapshot.items,
         stats: snapshot.stats,
         sources: snapshot.sources,
