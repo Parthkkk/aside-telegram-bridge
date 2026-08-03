@@ -30,6 +30,7 @@ import { useAttachments } from './hooks/useAttachments';
 import { resolvePills } from './utils/pills';
 import {
   applyTheme,
+  authenticateIfEnabled,
   backButton,
   cloudStorage,
   disableClosingConfirmation,
@@ -58,7 +59,20 @@ interface ThreadScreenState {
 type AuthState =
   | { phase: 'pending' }
   | { phase: 'ready'; name?: string }
-  | { phase: 'failed'; reason: string };
+  | { phase: 'failed'; reason: string }
+  /** The bearer token is minted; a biometric check the owner turned on failed or was cancelled. Recoverable -- see `retryUnlock`, never a dead end. */
+  | { phase: 'locked'; name?: string };
+
+/** A trimmed session, cached for the skeleton boot render. Never anything sensitive -- title and status only. */
+interface SkeletonSession {
+  id: string;
+  title: string;
+  status: string;
+  unread: boolean;
+}
+
+const SKELETON_KEY = 'sessionSkeleton';
+const BIOMETRICS_KEY = 'biometricsEnabled';
 
 type PickerState =
   | { kind: 'none' }
@@ -145,6 +159,37 @@ export default function App() {
   const [newMode, setNewMode] = useState<string | null>(null);
   const [newFinalConfirm, setNewFinalConfirm] = useState<boolean | null>(null);
 
+  /**
+   * Cached titles for the FIRST frame, before auth has even resolved.
+   * Read once at mount -- this is a cosmetic skeleton, not live data, so it
+   * does not need to react to anything. Written in `loadSessions` below.
+   */
+  const [skeleton, setSkeleton] = useState<SkeletonSession[]>([]);
+  useEffect(() => {
+    cloudStorage.getItem(SKELETON_KEY).then((raw) => {
+      if (!raw) return;
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) setSkeleton(parsed);
+      } catch {
+        // stale/corrupt cache -- the real load a moment later replaces it
+      }
+    });
+  }, []);
+
+  /**
+   * Run (or re-run) the biometric gate a successful `/api/auth` sits
+   * behind, when the owner has opted in via Settings. See
+   * `authenticateIfEnabled` in telegram.ts for the fail-open contract:
+   * this only ever resolves `false` on an explicit, granted, failed
+   * attempt -- never because the feature is unsupported or unset.
+   */
+  const runBiometricGate = useCallback(async (name?: string) => {
+    const enabled = (await cloudStorage.getItem(BIOMETRICS_KEY)) === '1';
+    const ok = await authenticateIfEnabled(enabled, 'Unlock Aside');
+    setAuth(ok ? { phase: 'ready', name } : { phase: 'locked', name });
+  }, []);
+
   // --- auth ---------------------------------------------------------------
   useEffect(() => {
     initTelegram();
@@ -160,18 +205,27 @@ export default function App() {
     api.auth(raw).then(
       (res) => {
         setAuthToken(res.token);
-        setAuth({ phase: 'ready', name: res.user.firstName });
+        void runBiometricGate(res.user.firstName);
       },
       (err) => setAuth({ phase: 'failed', reason: (err as Error).message }),
     );
     return off;
-  }, []);
+  }, [runBiometricGate]);
 
   // --- data ---------------------------------------------------------------
   const loadSessions = useCallback(async () => {
     try {
       const res = await api.sessions();
       setSessions(res.sessions);
+      // Cosmetic only -- trimmed to what the skeleton actually draws, and
+      // small enough to stay well under CloudStorage's 4096-char value cap.
+      const cache: SkeletonSession[] = res.sessions.slice(0, 12).map((s) => ({
+        id: s.id,
+        title: s.title,
+        status: s.status,
+        unread: s.unread,
+      }));
+      void cloudStorage.setItem(SKELETON_KEY, JSON.stringify(cache));
     } catch {
       // The list keeps its previous contents rather than blanking out.
     } finally {
@@ -310,6 +364,21 @@ export default function App() {
   };
 
   if (auth.phase === 'pending') {
+    // A skeleton from LAST session's cached titles beats a bare spinner --
+    // the plan's own "never a spinner on empty" rule (9.3). Falls back to
+    // the spinner on a true cold start, before anything has ever cached.
+    if (skeleton.length) {
+      return (
+        <div className="boot boot-skeleton">
+          {skeleton.map((row) => (
+            <div className="boot-skeleton-row" key={row.id}>
+              <span className={`boot-skeleton-dot ${row.unread ? 'is-unread' : ''}`} />
+              <span className="boot-skeleton-title">{row.title}</span>
+            </div>
+          ))}
+        </div>
+      );
+    }
     return (
       <div className="boot">
         <Spinner size={18} />
@@ -321,6 +390,24 @@ export default function App() {
       <div className="boot">
         <p className="boot-title">Can’t sign in</p>
         <p className="boot-reason">{auth.reason}</p>
+      </div>
+    );
+  }
+  if (auth.phase === 'locked') {
+    return (
+      <div className="boot">
+        <p className="boot-title">Locked</p>
+        <p className="boot-reason">Face ID / Touch ID didn’t confirm it was you.</p>
+        <button
+          type="button"
+          className="boot-retry"
+          onClick={() => {
+            haptic('light');
+            void runBiometricGate(auth.name);
+          }}
+        >
+          Try again
+        </button>
       </div>
     );
   }

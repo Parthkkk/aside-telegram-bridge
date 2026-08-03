@@ -41,6 +41,56 @@
   font-size: var(--text-sm);
 }
 
+.boot-retry {
+  margin-top: 8px;
+  padding: 8px 18px;
+  border-radius: var(--radius-lg);
+  background: var(--brand);
+  color: var(--color-white);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+/* A skeleton from last session's cached titles, not a bare spinner --
+   see App.tsx's boot-pending render. */
+.boot-skeleton {
+  justify-content: flex-start;
+  align-items: stretch;
+  gap: 2px;
+  padding-top: max(24px, var(--shell-content-top, 0px));
+}
+
+.boot-skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 6px;
+  text-align: left;
+  opacity: 0.55;
+}
+
+.boot-skeleton-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.boot-skeleton-dot.is-unread {
+  background: var(--brand);
+}
+
+.boot-skeleton-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  color: var(--secondary-foreground);
+}
+
 /* --- home ---------------------------------------------------------------- */
 
 .home {

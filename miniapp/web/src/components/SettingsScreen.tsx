@@ -22,8 +22,15 @@ import { AsideSymbol, Check, ChevronLeft, ProviderMark, Spinner } from './Icons'
 import { MemoryBrowser } from './MemoryBrowser';
 import { RoutinesList } from './RoutinesList';
 import { api } from '../api';
-import { haptic } from '../telegram';
+import {
+  biometricsSupported,
+  cloudStorage,
+  haptic,
+  requestBiometricAccess,
+} from '../telegram';
 import type { MiniappSettings, StatusResponse } from '../types';
+
+const BIOMETRICS_KEY = 'biometricsEnabled';
 
 function Section({
   title,
@@ -172,6 +179,32 @@ export function SettingsScreen({
   const [subScreen, setSubScreen] = useState<'none' | 'memory' | 'routines'>(
     'none',
   );
+
+  const [biometricsOn, setBiometricsOn] = useState(false);
+  useEffect(() => {
+    cloudStorage.getItem(BIOMETRICS_KEY).then((value) => setBiometricsOn(value === '1'));
+  }, []);
+
+  /**
+   * Turning this ON requires actually granting access first -- flipping
+   * the switch without a granted access would silently do nothing at the
+   * next boot (see `authenticateIfEnabled`'s fail-open contract in
+   * telegram.ts), which reads as a broken toggle rather than an honest
+   * one. Turning OFF has no such requirement.
+   */
+  const toggleBiometrics = async (next: boolean) => {
+    haptic('light');
+    if (!next) {
+      setBiometricsOn(false);
+      void cloudStorage.setItem(BIOMETRICS_KEY, '0');
+      return;
+    }
+    const granted = await requestBiometricAccess(
+      'Confirm it\u2019s you before opening Aside',
+    );
+    setBiometricsOn(granted);
+    void cloudStorage.setItem(BIOMETRICS_KEY, granted ? '1' : '0');
+  };
 
   useEffect(() => {
     let alive = true;
@@ -352,6 +385,25 @@ export function SettingsScreen({
                 }
               />
             </Section>
+
+            {biometricsSupported() ? (
+              <Section
+                title="Privacy"
+                note="Off by default. This app runs commands on your computer, so it's worth the extra tap."
+              >
+                <Row
+                  title="Require Face ID / Touch ID"
+                  description="Confirm it's you before Aside opens."
+                  control={
+                    <Switch
+                      checked={biometricsOn}
+                      label="Require Face ID to open"
+                      onChange={(next) => void toggleBiometrics(next)}
+                    />
+                  }
+                />
+              </Section>
+            ) : null}
 
             <Section title="Aside on your phone">
               <button

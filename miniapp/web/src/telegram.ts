@@ -141,6 +141,22 @@ interface TelegramWebApp {
   SecondaryButton?: WebAppBottomButton;
   SettingsButton?: WebAppSettingsButton;
   CloudStorage?: WebAppCloudStorage;
+  BiometricManager?: {
+    isInited: boolean;
+    isBiometryAvailable: boolean;
+    isAccessRequested: boolean;
+    isAccessGranted: boolean;
+    biometryType: 'finger' | 'face' | 'unknown';
+    init(callback?: () => void): void;
+    requestAccess(
+      params: { reason?: string },
+      callback?: (granted: boolean) => void,
+    ): void;
+    authenticate(
+      params: { reason?: string },
+      callback?: (success: boolean) => void,
+    ): void;
+  };
   HapticFeedback?: {
     impactOccurred(style: 'light' | 'medium' | 'heavy' | 'soft' | 'rigid'): void;
     notificationOccurred(type: 'error' | 'success' | 'warning'): void;
@@ -624,4 +640,70 @@ export function shareToStory(mediaUrl: string, caption?: string): void {
 
 export function canShareToStory(): boolean {
   return Boolean(webApp()?.shareToStory);
+}
+
+// --- biometrics (Day 1 plan 5.6) --------------------------------------------
+
+/**
+ * Face ID / fingerprint gating app open. Deliberately FAIL-OPEN at every
+ * step: this app is the only way to reach an Aside session from a phone,
+ * and a gate that gets stuck denying access would lock the owner out of
+ * their own tool with no recovery path except uninstalling and losing
+ * whatever CloudStorage/SecureStorage state they had. So:
+ *
+ *  - the SETTING defaults to OFF, not on as the plan first suggested. The
+ *    plan's "default on" was written without a live device to verify the
+ *    init/request/authenticate sequence actually completes cleanly on
+ *    Parth's own client -- shipping an unverified default-on OS auth gate
+ *    in front of the only interface to a tool that runs arbitrary code is
+ *    the wrong risk to take sight unseen. Opt-in first; default can move
+ *    once it's been used for real.
+ *  - if the manager is unsupported, not yet inited, or access was never
+ *    granted, `authenticateIfEnabled` resolves `true` (pass) rather than
+ *    blocking -- an unavailable lock is not a locked door.
+ *  - `initBiometrics` only flips `isAccessGranted` on if the user actively
+ *    grants it through `requestAccess`; declining leaves the setting
+ *    effectively inert rather than retrying on every boot.
+ */
+export function biometricsSupported(): boolean {
+  return Boolean(webApp()?.BiometricManager?.isBiometryAvailable);
+}
+
+/** Must resolve before `requestBiometricAccess`/`authenticateBiometrics` can do anything. */
+export function initBiometrics(): Promise<void> {
+  return new Promise((resolve) => {
+    const manager = webApp()?.BiometricManager;
+    if (!manager || manager.isInited) {
+      resolve();
+      return;
+    }
+    manager.init(() => resolve());
+  });
+}
+
+export function requestBiometricAccess(reason: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const manager = webApp()?.BiometricManager;
+    if (!manager?.isBiometryAvailable) {
+      resolve(false);
+      return;
+    }
+    manager.requestAccess({ reason }, (granted) => resolve(Boolean(granted)));
+  });
+}
+
+/**
+ * Gate app open. Resolves `true` (proceed) in every case except an
+ * explicit, granted, failed authentication attempt -- see the fail-open
+ * note above.
+ */
+export async function authenticateIfEnabled(enabled: boolean, reason: string): Promise<boolean> {
+  if (!enabled) return true;
+  const manager = webApp()?.BiometricManager;
+  if (!manager?.isBiometryAvailable) return true;
+  await initBiometrics();
+  if (!manager.isAccessGranted) return true;
+  return new Promise((resolve) => {
+    manager.authenticate({ reason }, (success) => resolve(success !== false));
+  });
 }
