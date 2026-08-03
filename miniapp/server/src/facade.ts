@@ -257,6 +257,18 @@ export function fetchDefaultModel(
  * Clear a session's unread state, mirroring what opening it in the browser
  * sidepanel does. Best-effort: a failure here must never block a read.
  */
+/**
+ * Read-only routine metadata: name, schedule, next run, state. The facade
+ * exposes `list`/`get` only -- create/update/delete require an `aside exec`
+ * turn calling the `routine_update` tool, which costs a full turn. Day 4
+ * plan (8.2) ships read plus pause/resume first and defers authoring.
+ */
+export function fetchRoutines(cache: FacadeCache): Promise<unknown[]> {
+  return cache
+    .call<unknown[] | null>('routines:list', 'aside.routines.list()', 10_000)
+    .then((rows) => (Array.isArray(rows) ? rows : []));
+}
+
 export async function markSessionRead(
   cache: FacadeCache,
   id: string,

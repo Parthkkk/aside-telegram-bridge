@@ -21,6 +21,7 @@ import {
 import {
   FacadeCache,
   fetchDefaultModel,
+  fetchRoutines,
   fetchSession,
   markSessionRead,
 } from './facade.js';
@@ -105,6 +106,13 @@ import {
   openNewTab,
   snapshotTab,
 } from './browser.js';
+import { defaultAsideRoot } from './config.js';
+import {
+  buildMemoryTree,
+  readMemoryFile,
+  resolveMemoryFile,
+} from './memorybrowser.js';
+import { searchTranscripts } from './search.js';
 
 const MAX_MESSAGE_CHARS = 32_000;
 const DEFAULT_ENTRY_LIMIT = 800;
@@ -1808,6 +1816,87 @@ export async function buildServer(
         return await snapshotTab(facade, targetId);
       } catch (err) {
         return sendBrowserError(reply, err);
+      }
+    },
+  );
+
+  // --- Day 4: depth (plan section 8) --------------------------------------
+
+  /** Read-only memory browser (8.1). No write route exists anywhere in this file, on purpose -- see memorybrowser.ts's own header. */
+  const memoryRoot = path.join(defaultAsideRoot(), 'memory');
+
+  app.get('/api/memory', { preHandler: requireAuth }, async () => ({
+    tree: buildMemoryTree(memoryRoot),
+  }));
+
+  app.get(
+    '/api/memory/file',
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const query = request.query as { path?: string };
+      const file = resolveMemoryFile(memoryRoot, query.path);
+      if (!file) return reply.code(404).send({ error: 'not_found' });
+      try {
+        return { content: readMemoryFile(file) };
+      } catch {
+        return reply.code(404).send({ error: 'not_found' });
+      }
+    },
+  );
+
+  /**
+   * Read-only routines (8.2). The facade's own surface is `list`/`get`
+   * ONLY -- verified against the live daemon, see the build plan's section
+   * 1.4. Create/update/delete (and, in practice, pause/resume: the facade
+   * exposes no mutation at all) would need a full `aside exec` turn calling
+   * the `routine_update` tool, which is a different cost model entirely and
+   * is deliberately not wired up here.
+   */
+  app.get('/api/routines', { preHandler: requireAuth }, async () => ({
+    routines: await fetchRoutines(facade),
+  }));
+
+  /** Full-text search across transcripts on disk (8.7). */
+  app.get(
+    '/api/search',
+    { preHandler: requireAuth },
+    async (request) => {
+      const query = request.query as { q?: string };
+      return { hits: searchTranscripts(config.sessionsDir, String(query.q || '')) };
+    },
+  );
+
+  /**
+   * PDF text (8.3), scoped to a session's own artifacts/attachments --
+   * exactly the same containment `resolveArtifact` already gives the
+   * download route, so this adds no new filesystem surface.
+   */
+  app.get(
+    '/api/sessions/:id/pdf',
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const query = request.query as { path?: string; group?: string };
+      if (!isValidSessionId(id)) {
+        return reply.code(400).send({ error: 'bad_session_id' });
+      }
+      const group: ArtifactGroup = isArtifactGroup(query.group)
+        ? query.group
+        : 'artifacts';
+      const dir = resolveSessionDir(config.sessionsDir, id);
+      if (!dir) return reply.code(404).send({ error: 'session_not_found' });
+      const file = resolveArtifact(dir, group, String(query.path ?? ''));
+      if (!file || path.extname(file).toLowerCase() !== '.pdf') {
+        return reply.code(403).send({ error: 'forbidden_path' });
+      }
+      try {
+        const text = await facade.mutate(
+          `aside.pdf.read(${JSON.stringify(file)})`,
+        );
+        return { text };
+      } catch (err) {
+        app.log.warn({ err }, 'pdf read failed');
+        return reply.code(502).send({ error: 'pdf_read_failed' });
       }
     },
   );
