@@ -20,7 +20,9 @@ import { RestCue, RestHero } from './components/Rest';
 import { StreamFooter, estimateTokens } from './components/StreamFooter';
 import { TodoSection } from './components/TodoSection';
 import { ErrorCard } from './components/ErrorCard';
-import { ChevronLeft, PanelRight, Settings, Spinner } from './components/Icons';
+import { ChevronLeft, Globe, PanelRight, Settings, Spinner } from './components/Icons';
+import { TabDeck } from './components/TabDeck';
+import { WatchModeCard } from './components/WatchMode';
 import type { CitationMark } from './utils/citations';
 import { api, setAuthToken } from './api';
 import { useThread } from './hooks/useThread';
@@ -543,6 +545,7 @@ function ThreadScreen({
   const scroller = useRef<HTMLDivElement>(null);
   const [sending, setSending] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [tabDeckOpen, setTabDeckOpen] = useState(false);
   const [citation, setCitation] = useState<CitationMark | null>(null);
 
   // A stray swipe-to-close should not be able to drop a running turn.
@@ -725,6 +728,17 @@ function ThreadScreen({
           className="icon-button"
           onClick={() => {
             haptic('light');
+            setTabDeckOpen(true);
+          }}
+          aria-label="Browser tabs"
+        >
+          <Globe size={18} strokeWidth={1.75} />
+        </button>
+        <button
+          type="button"
+          className="icon-button"
+          onClick={() => {
+            haptic('light');
             setPanelOpen(true);
           }}
           aria-label="Session panel"
@@ -734,6 +748,7 @@ function ThreadScreen({
       </header>
 
       <div className="thread-scroll" ref={scroller} onScroll={onScroll}>
+        <WatchModeCard sessionId={sessionId} busy={thread.busy} items={thread.items} />
         {thread.loading && thread.items.length === 0 ? (
           <p className="list-empty">Loading…</p>
         ) : null}
@@ -831,6 +846,8 @@ function ThreadScreen({
           onClose={() => setCitation(null)}
         />
       ) : null}
+
+      {tabDeckOpen ? <TabDeck onClose={() => setTabDeckOpen(false)} /> : null}
 
       {renderPicker({
         ...effective,

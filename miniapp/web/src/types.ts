@@ -497,6 +497,25 @@ export interface MemoryNode {
   children?: MemoryNode[];
 }
 
+// --- browser surfaces (Day 3) ---------------------------------------------
+
+/** One open tab on the Mac. Mirrors `server/src/browser.ts`. */
+export interface BrowserTab {
+  id: string;
+  targetId: string;
+  windowId: number;
+  title: string;
+  url: string;
+  active: boolean;
+  faviconUrl?: string;
+}
+
+export interface TabCapture {
+  dataUrl: string;
+  url: string;
+  capturedAt: number;
+}
+
 // --- routines (8.2) ------------------------------------------------------
 
 /**

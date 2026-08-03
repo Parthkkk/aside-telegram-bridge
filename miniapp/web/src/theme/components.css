@@ -2596,6 +2596,203 @@
   padding: 4px 2px;
 }
 
+/* --- Tab Deck (Day 3, 7.2) ------------------------------------------ */
+
+.tab-deck-go {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 10px;
+  border-radius: var(--radius-lg);
+  background: var(--muted);
+}
+
+.tab-deck-go input {
+  flex: 1;
+  font-size: var(--text-sm);
+  color: var(--foreground);
+}
+
+.tab-deck-go button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  background: var(--brand);
+  color: var(--color-white);
+}
+
+.tab-deck-go button:disabled {
+  opacity: 0.5;
+}
+
+.tab-deck-window {
+  margin-bottom: 10px;
+}
+
+.tab-deck-window-head {
+  margin: 0 0 4px;
+  padding: 0 2px;
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--surface-tertiary-foreground);
+}
+
+.tab-deck-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tab-deck-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: var(--radius-lg);
+  text-align: left;
+  color: var(--secondary-foreground);
+}
+
+.tab-deck-row-main:active {
+  background: var(--muted);
+}
+
+.tab-deck-favicon {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  flex: none;
+}
+
+.tab-deck-titles {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tab-deck-title {
+  font-size: var(--text-sm);
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-deck-host {
+  font-size: var(--text-xs);
+  color: var(--surface-tertiary-foreground);
+}
+
+.tab-deck-active {
+  flex: none;
+  font-size: var(--text-xs);
+  color: var(--brand);
+}
+
+/* --- Page Peek (Day 3, 7.3) ------------------------------------------ */
+
+.page-peek-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  background: var(--muted);
+}
+
+.page-peek-image {
+  max-width: 100%;
+  transition: transform var(--dur-base, 200ms) ease;
+}
+
+.page-peek-image.is-zoomed {
+  transform: scale(2);
+}
+
+.page-peek-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px calc(10px + max(env(safe-area-inset-bottom), var(--shell-safe-bottom, 0px)));
+  border-top: var(--hairline) solid var(--border);
+}
+
+.page-peek-timestamp {
+  font-size: var(--text-xs);
+  color: var(--muted-foreground);
+}
+
+.page-peek-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* --- Watch Mode (Day 3, 7.4) ------------------------------------------ */
+
+.watch-mode-card {
+  margin: 0 0 10px;
+  border-radius: var(--radius-xl);
+  background: var(--muted);
+  overflow: hidden;
+}
+
+.watch-mode-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  font-size: var(--text-sm);
+  color: var(--secondary-foreground);
+}
+
+.watch-mode-live {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--state-waiting, #f59e0b);
+  animation: watch-mode-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes watch-mode-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.watch-mode-toggle {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--brand);
+}
+
+.watch-mode-image {
+  display: block;
+  width: 100%;
+}
+
+.watch-mode-url {
+  display: block;
+  padding: 6px 10px 8px;
+  font-size: var(--text-xs);
+  color: var(--surface-tertiary-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ====================================================================
  * Home: resting state over hidden history
  *

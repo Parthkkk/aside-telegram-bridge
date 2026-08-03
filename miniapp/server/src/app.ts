@@ -1820,6 +1820,39 @@ export async function buildServer(
     },
   );
 
+  /**
+   * The same capture as `/capture`, but as raw `image/webp` bytes behind a
+   * real URL rather than JSON -- what an `<img src>` and Telegram's own
+   * `shareToStory` (plan 8.6, which fetches media server-side and does
+   * NOT accept a `data:` URL) both need. `requireAuthOrQueryToken` because
+   * this is loaded by the browser/Telegram's own fetcher, not by this
+   * app's `fetch()` wrapper, so a header-based bearer token is not an
+   * option -- same reasoning as the existing artifact download route.
+   */
+  app.get(
+    '/api/tabs/:targetId/capture.webp',
+    { preHandler: requireAuthOrQueryToken },
+    async (request, reply) => {
+      const { targetId } = request.params as { targetId: string };
+      if (!isValidTargetId(targetId)) {
+        return reply.code(400).send({ error: 'bad_target_id' });
+      }
+      const query = request.query as { q?: string };
+      const quality = Number(query.q) || undefined;
+      try {
+        const result = await captureGate.run(targetId, () =>
+          captureTab(facade, targetId, { quality }),
+        );
+        reply.header('cache-control', 'no-store');
+        return reply
+          .type('image/webp')
+          .send(Buffer.from(result.base64, 'base64'));
+      } catch (err) {
+        return sendBrowserError(reply, err);
+      }
+    },
+  );
+
   // --- Day 4: depth (plan section 8) --------------------------------------
 
   /** Read-only memory browser (8.1). No write route exists anywhere in this file, on purpose -- see memorybrowser.ts's own header. */

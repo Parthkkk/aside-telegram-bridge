@@ -3,6 +3,7 @@ import type {
   ArtifactGroup,
   ArtifactsResponse,
   AuthResponse,
+  BrowserTab,
   ChildSteps,
   CitationSource,
   Entry,
@@ -14,6 +15,7 @@ import type {
   SearchHit,
   SessionRow,
   StatusResponse,
+  TabCapture,
   ThreadItem,
   ThreadResponse,
   ThreadStats,
@@ -312,6 +314,49 @@ export const api = {
    * back, so the caller must inspect at runtime.
    */
   routines: () => request<{ routines: RoutineRow[] }>('/api/routines'),
+
+  // --- browser surfaces (Day 3) ---------------------------------------
+
+  tabs: () => request<{ tabs: BrowserTab[] }>('/api/tabs'),
+
+  openTab: (url: string) =>
+    request<{ targetId: string | null; url: string }>('/api/tabs', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }),
+
+  closeTab: (targetId: string) =>
+    request<{ closed: boolean }>(`/api/tabs/${encodeURIComponent(targetId)}`, {
+      method: 'DELETE',
+    }),
+
+  /**
+   * The server enforces a 2s-per-tab / 1-global-concurrent capture limit
+   * and answers a violation with 429/409 (see `browser.ts`'s `CaptureGate`)
+   * -- callers polling this (Watch Mode) must treat those as "skip this
+   * tick", not as an error to surface.
+   */
+  captureTab: (targetId: string, quality = 55) =>
+    request<TabCapture>(
+      `/api/tabs/${encodeURIComponent(targetId)}/capture?q=${quality}`,
+    ),
+
+  snapshotTab: (targetId: string) =>
+    request<{ tree: string; capturedAt: number }>(
+      `/api/tabs/${encodeURIComponent(targetId)}/snapshot`,
+    ),
+
+  /**
+   * A real fetchable URL for a capture, token in the query the same way
+   * `artifactUrl`/`localFileUrl` do -- for an `<img src>` (cheaper than
+   * holding a giant base64 string in JS memory) and for `shareToStory`,
+   * which fetches media itself and does not accept a `data:` URL. Append
+   * a cache-busting param yourself (e.g. `&t=${Date.now()}`) when polling
+   * the same tab repeatedly, since the browser would otherwise cache the
+   * first response against this URL.
+   */
+  captureUrl: (targetId: string, quality = 55) =>
+    `/api/tabs/${encodeURIComponent(targetId)}/capture.webp?q=${quality}&token=${encodeURIComponent(authToken)}`,
 };
 
 function artifactPath(

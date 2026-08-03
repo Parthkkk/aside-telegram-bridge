@@ -75,6 +75,7 @@ export {
   CopyIcon,
   PanelRight,
   Download,
+  Globe,
 };
 
 /**

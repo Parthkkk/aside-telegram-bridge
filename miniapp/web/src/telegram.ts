@@ -101,6 +101,10 @@ interface TelegramWebApp {
   openLink?: (url: string, options?: { try_instant_view?: boolean }) => void;
   downloadFile?: (params: { url: string; file_name: string }) => void;
   isVersionAtLeast?: (version: string) => boolean;
+  shareToStory?: (
+    mediaUrl: string,
+    params?: { text?: string; widget_link?: { url: string; name?: string } },
+  ) => void;
 
   // --- Bot API 8.0: fullscreen and safe areas ---------------------------
   requestFullscreen?: () => void;
@@ -599,4 +603,25 @@ export const cloudStorage = {
 export function performanceClass(): 'LOW' | 'AVERAGE' | 'HIGH' {
   const match = navigator.userAgent.match(/;\s*(LOW|AVERAGE|HIGH)\)/);
   return (match?.[1] as 'LOW' | 'AVERAGE' | 'HIGH') ?? 'HIGH';
+}
+
+/**
+ * Share a page capture to the user's own Telegram story (plan 8.6). Needs
+ * a real fetchable HTTPS URL, not a `data:` URL -- Telegram fetches the
+ * media itself server-side rather than accepting inline bytes. A capture
+ * from `/api/tabs/:targetId/capture` comes back as a data URL (see
+ * `api.captureTab`), so callers must be pointed at this only when they
+ * have a real URL some other way; where that is not available, the
+ * capability check below simply makes the call a no-op instead of an
+ * error, since the failure mode (nothing happens) is honest -- there is
+ * no story to share without a URL Telegram itself can fetch.
+ */
+export function shareToStory(mediaUrl: string, caption?: string): void {
+  const app = webApp();
+  if (!mediaUrl || !app?.shareToStory) return;
+  app.shareToStory(mediaUrl, caption ? { text: caption } : undefined);
+}
+
+export function canShareToStory(): boolean {
+  return Boolean(webApp()?.shareToStory);
 }
