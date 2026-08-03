@@ -384,6 +384,15 @@ export interface SessionRow {
   waiting?: boolean;
 }
 
+/** A full-text hit inside a transcript body, returned by `/api/search`. */
+export interface SearchHit {
+  sessionId: string;
+  title: string;
+  /** The matching text, trimmed around the hit so it reads like a preview. */
+  snippet: string;
+  ts?: number;
+}
+
 // --- status / catalog ----------------------------------------------------
 
 export interface CatalogModel {
@@ -475,4 +484,26 @@ export interface AuthResponse {
   token: string;
   user: { id: number; firstName?: string; username?: string };
   expiresIn: number;
+}
+
+// --- memory browser (8.1) -----------------------------------------------
+
+/** One node in this account's memory tree. Mirrors `server/src/memorybrowser.ts`. */
+export interface MemoryNode {
+  name: string;
+  /** Relative to the memory root -- what the client sends back to read it. */
+  relPath: string;
+  type: 'file' | 'dir';
+  children?: MemoryNode[];
+}
+
+// --- routines (8.2) ------------------------------------------------------
+
+/**
+ * The facade returns `unknown[]` from `aside.routines.list()`; the shape
+ * is whatever the daemon gives back on this account. We type it loosely
+ * here so the renderer can reach for fields without a compile-time lie.
+ */
+export interface RoutineRow {
+  [key: string]: unknown;
 }

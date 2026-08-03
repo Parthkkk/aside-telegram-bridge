@@ -8,7 +8,10 @@ import type {
   Entry,
   ErrorAlert,
   MessagesResponse,
+  MemoryNode,
   MiniappSettings,
+  RoutineRow,
+  SearchHit,
   SessionRow,
   StatusResponse,
   ThreadItem,
@@ -218,6 +221,15 @@ export const api = {
       { method: 'POST', body: JSON.stringify(payload) },
     ),
 
+  /**
+   * Full-text search across transcript bodies on disk. The session list
+   * already has a client-side filter over titles and previews; this finds
+   * matches inside sessions nobody has open, which is the incremental
+   * value. Requires a non-empty query (the server ignores short ones).
+   */
+  search: (query: string) =>
+    request<{ hits: SearchHit[] }>(`/api/search?q=${encodeURIComponent(query)}`),
+
   status: () => request<StatusResponse>('/api/status'),
 
   settings: () => request<{ settings: MiniappSettings }>('/api/settings'),
@@ -227,6 +239,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(patch),
     }),
+
+  /**
+   * Extracted text of a PDF artifact (section 8.3).
+   *
+   * Same auth and same path containment as `artifactBlob`, but asks the
+   * server to run `aside.pdf.read` and return plain text -- the phone
+   * cannot render the binary, and a wall of raw bytes helps nobody.
+   */
+  pdfText: (sessionId: string, group: ArtifactGroup, path: string) =>
+    request<{ text: string }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/pdf?group=${group}&path=${encodeURIComponent(path)}`,
+    ),
 
   /** The session's own files, grouped into artifacts and attachments. */
   artifacts: (sessionId: string) =>
@@ -267,6 +291,27 @@ export const api = {
     `/api/sessions/${encodeURIComponent(sessionId)}/file?path=${encodeURIComponent(
       absPath,
     )}&token=${encodeURIComponent(authToken)}`,
+
+  /**
+   * This account's memory tree (plan 8.1). Read-only: the server has no
+   * write route, by construction. Directories first, then files, both
+   * alphabetical; only `.md`/`.markdown`/`.txt` appear.
+   */
+  memoryTree: () => request<{ tree: MemoryNode[] }>('/api/memory'),
+
+  /** Raw markdown/text content of one memory page. */
+  memoryFile: (relPath: string) =>
+    request<{ content: string }>(
+      `/api/memory/file?path=${encodeURIComponent(relPath)}`,
+    ),
+
+  /**
+   * Scheduled routines (plan 8.2). Read-only at the daemon level:
+   * `aside.routines` exposes `list`/`get` only, verified in the plan's
+   * own section 1.4. The shape of each row is whatever the facade hands
+   * back, so the caller must inspect at runtime.
+   */
+  routines: () => request<{ routines: RoutineRow[] }>('/api/routines'),
 };
 
 function artifactPath(

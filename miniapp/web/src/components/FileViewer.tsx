@@ -7,11 +7,15 @@ import { downloadFile } from '../telegram';
 import { formatBytes } from '../utils/format';
 import type { ArtifactFile, ArtifactGroup } from '../types';
 
+/** PDFs are classified `binary` by the server's kind map, so check by extension. */
+const isPdf = (file: ArtifactFile) => file.path.toLowerCase().endsWith('.pdf');
+
 type Loaded =
   | { state: 'loading' }
   | { state: 'text'; body: string }
   | { state: 'image'; url: string }
   | { state: 'binary' }
+  | { state: 'pdf'; body: string }
   | { state: 'failed'; reason: string };
 
 /**
@@ -42,6 +46,15 @@ export function FileViewer({
   useEffect(() => {
     let alive = true;
     let objectUrl = '';
+
+    if (isPdf(file)) {
+      api.pdfText(sessionId, group, file.path).then(
+        (res) => alive && setLoaded({ state: 'pdf', body: res.text }),
+        (err: Error) =>
+          alive && setLoaded({ state: 'failed', reason: err.message }),
+      );
+      return undefined;
+    }
 
     if (file.kind === 'binary') {
       setLoaded({ state: 'binary' });
@@ -103,6 +116,21 @@ export function FileViewer({
         ) : (
           <pre className="file-source">{loaded.body}</pre>
         )
+      ) : null}
+      {loaded.state === 'pdf' ? (
+        <>
+          <pre className="file-pdf">{loaded.body}</pre>
+          <button
+            type="button"
+            className="panel-row"
+            onClick={() =>
+              downloadFile(api.artifactUrl(sessionId, group, file.path), file.name)
+            }
+          >
+            <Download size={15} strokeWidth={1.75} />
+            <span className="panel-row-name">Download original {file.name}</span>
+          </button>
+        </>
       ) : null}
       {loaded.state === 'binary' ? (
         <button

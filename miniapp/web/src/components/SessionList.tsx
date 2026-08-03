@@ -10,8 +10,9 @@
  * this. Only the title, when it last moved, whether it is unread, and
  * whether it is running.
  */
-import { useMemo, useState } from 'react';
-import type { SessionRow } from '../types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { SearchHit, SessionRow } from '../types';
+import { api } from '../api';
 import { relativeTime } from '../utils/time';
 import { ArrowDownUp, LayoutGrid, ListIcon, Search, Spinner } from './Icons';
 import { haptic } from '../telegram';
@@ -37,6 +38,18 @@ export function SessionList({ sessions, onOpen, loading }: SessionListProps) {
   const [query, setQuery] = useState('');
   const [oldestFirst, setOldestFirst] = useState(false);
 
+  // Hits from the server-side body-text search. These live in a separate
+  // section from the client-side title/preview filter above; the server
+  // already excludes pure title matches to avoid duplicating what the
+  // in-memory filter already shows.
+  const [remoteHits, setRemoteHits] = useState<SearchHit[]>([]);
+  const [remoteSearching, setRemoteSearching] = useState(false);
+
+  // Stale-request guard: each debounce cycle bumps this counter, and the
+  // response handler checks it on resolution so an older query's slow reply
+  // cannot clobber results from a newer one the user already typed.
+  const searchReqId = useRef(0);
+
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filtered = q
@@ -56,6 +69,36 @@ export function SessionList({ sessions, onOpen, loading }: SessionListProps) {
     });
     return oldestFirst ? sorted.reverse() : sorted;
   }, [sessions, query, oldestFirst]);
+
+  // Debounced server-side body search. Fires 300ms after the user stops
+  // typing, and only when there is an actual query -- an empty/cleared box
+  // wipes results immediately without a round-trip. The ref counter keeps
+  // the resolve from the previous query off the DOM if the user has
+  // already moved on to a newer one.
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setRemoteHits([]);
+      setRemoteSearching(false);
+      return;
+    }
+    const myId = ++searchReqId.current;
+    setRemoteSearching(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const { hits } = await api.search(q);
+        if (searchReqId.current !== myId) return;
+        setRemoteHits(hits);
+      } catch {
+        if (searchReqId.current !== myId) return;
+        setRemoteHits([]);
+      } finally {
+        if (searchReqId.current !== myId) return;
+        setRemoteSearching(false);
+      }
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [query]);
 
   const choose = (next: SessionView) => {
     setView(next);
@@ -196,6 +239,26 @@ export function SessionList({ sessions, onOpen, loading }: SessionListProps) {
           ))}
         </div>
       )}
+
+      {searching && query.trim() && (remoteSearching || remoteHits.length > 0) ? (
+        <div className="search-hits">
+          <span className="search-hits-heading">
+            {remoteSearching ? <Spinner size={12} /> : null}
+            Also found in older messages
+          </span>
+          {remoteHits.map((hit) => (
+            <button
+              key={hit.sessionId}
+              type="button"
+              className="search-hit-row"
+              onClick={() => open(hit.sessionId)}
+            >
+              <span className="search-hit-title">{hit.title}</span>
+              <span className="search-hit-snippet">{hit.snippet}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
