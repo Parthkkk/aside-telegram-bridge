@@ -319,6 +319,70 @@ def tg(method, params=None, timeout=65):
         return json.load(r)
 
 
+# --- relay to the Mini App server's own sessions (Day 2 plan, 4.2/6.2) ---
+#
+# This poller is the ONLY thing allowed to call Telegram's getUpdates for
+# this bot token -- a second poller (say, one added to the Node server)
+# would steal this one's updates nondeterministically. So a tap on a Mini
+# App PUSH notification (a `q:`/`stop:` callback -- see server/src/notify.ts)
+# still arrives here, and this bridge relays it over loopback to the Node
+# server's own internal route rather than answering it itself. The two
+# bots -- this bridge's own persistent session, and whatever sessions the
+# Mini App is driving -- stay completely separate; this is pure relay.
+MINIAPP_PORT = int((CONFIG.get("miniapp") or {}).get("port", 8790))
+MINIAPP_SECRET_PATH = os.path.join(BRIDGE_DIR, "miniapp-secret.json")
+_miniapp_secret_cache = None
+
+
+def _miniapp_secret():
+    """The same HS256 signing secret the Node server keeps at
+    miniapp-secret.json (config.ts's loadOrCreateJwtSecret). Cached after
+    the first successful read; re-read on a miss in case the file did not
+    exist yet the first time this process asked (matches the Node side,
+    which creates it lazily on its own first boot).
+    """
+    global _miniapp_secret_cache
+    if _miniapp_secret_cache:
+        return _miniapp_secret_cache
+    try:
+        with open(MINIAPP_SECRET_PATH) as f:
+            secret = (json.load(f) or {}).get("secret")
+        if secret:
+            _miniapp_secret_cache = secret
+        return secret
+    except (OSError, ValueError):
+        return None
+
+
+def _post_internal_callback(data):
+    """Relay one Mini App notification callback (a `q:...` or `stop:...`
+    payload) to the Node server's loopback-only internal route. Best
+    effort: the callback_query has already been answered by the caller,
+    so a failure here just means the tap silently did nothing rather than
+    breaking the poll loop.
+    """
+    secret = _miniapp_secret()
+    if not secret:
+        log("miniapp relay: no secret at %s, dropping %r"
+            % (MINIAPP_SECRET_PATH, data))
+        return
+    body = json.dumps({"data": data}).encode()
+    req = urllib.request.Request(
+        "http://127.0.0.1:%d/api/internal/callback" % MINIAPP_PORT,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Internal-Secret": secret,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            r.read()
+    except Exception as e:  # noqa: BLE001
+        log("miniapp relay failed for %r: %s" % (data, e))
+
+
 def html_escape(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -930,6 +994,12 @@ def handle_callback(cq):
         return
     if data.startswith("qst:"):
         _handle_question_tap(data, mid)
+        return
+    # A tap on a Mini App push notification (server/src/notify.ts). This
+    # bridge does not own that session -- it is purely a relay, since it
+    # already holds the one poller this bot token gets.
+    if data.startswith("q:") or data.startswith("stop:"):
+        _post_internal_callback(data)
         return
     if not (data.startswith("sess:") or data.startswith("eff:")):
         return

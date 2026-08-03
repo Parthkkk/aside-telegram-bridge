@@ -64,6 +64,7 @@ import {
 } from './threadstore.js';
 import type { ChildSession, ThreadItem } from './thread.js';
 import type { SubagentIndex } from './subagents.js';
+import type { ActiveViewers } from './viewers.js';
 
 const HEARTBEAT_MS = 30_000;
 
@@ -114,10 +115,16 @@ interface Deps {
   threads: ThreadStore;
   subagents: SubagentIndex;
   jwtSecret: string;
+  /**
+   * Optional: fed a reference count of who is actively subscribed to each
+   * session, so `notify.ts` can suppress a push for a thread that is
+   * already open on screen. Absent in tests that don't care.
+   */
+  viewers?: ActiveViewers;
 }
 
 export function attachWebSocket(deps: Deps): WebSocketServer {
-  const { app, config, runner, watchers, threads, subagents, jwtSecret } = deps;
+  const { app, config, runner, watchers, threads, subagents, jwtSecret, viewers } = deps;
   const wss = new WebSocketServer({ noServer: true });
 
   // Each connection registers four listeners across these two emitters, so
@@ -343,6 +350,7 @@ export function attachWebSocket(deps: Deps): WebSocketServer {
       if (awaitTimer) clearTimeout(awaitTimer);
       awaitTimer = null;
       if (sessionId && msgFile) watchers.release(sessionId);
+      if (sessionId) viewers?.leave(sessionId);
       sessionId = null;
       msgFile = null;
       baseline = [];
@@ -365,6 +373,7 @@ export function attachWebSocket(deps: Deps): WebSocketServer {
      */
     const attach = (id: string, file: string) => {
       msgFile = file;
+      viewers?.enter(id);
       try {
         // The client has just loaded the thread over REST, so the baseline
         // starts at what is on disk now rather than empty -- otherwise

@@ -16,6 +16,8 @@
   "miniapp": {
     "port": 8790,
     "tunnel": "cloudflared",
-    "auto_register_menu": true
+    "auto_register_menu": true,
+    "_comment_deep_link_base": "<bot_username>/<mini_app_short_name> from BotFather, e.g. asidebot/app. Push notifications link straight into the right thread when set; omitted otherwise.",
+    "deep_link_base": ""
   }
 }

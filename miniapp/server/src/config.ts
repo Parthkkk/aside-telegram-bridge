@@ -120,6 +120,15 @@ export interface MiniappSection {
   logPath: string;
   /** Cap on the log file before it is rotated to `<name>.1`. */
   logMaxBytes: number;
+  /**
+   * `<bot_username>/<mini_app_short_name>`, exactly as registered in
+   * BotFather, e.g. `"asidebot/app"`. Used to build
+   * `t.me/<value>?startapp=session_<id>` deep links on push notifications
+   * (Day 2 plan, 6.5). `null` when unset -- notifications simply omit the
+   * link rather than guessing at an unconfigured bot/app name, which would
+   * produce a dead link.
+   */
+  deepLinkBase: string | null;
 }
 
 export interface MiniappConfig {
@@ -333,6 +342,9 @@ export function loadConfig(): MiniappConfig {
       String(section.log_path || path.join(stateDir, 'miniapp.log')),
     ),
     logMaxBytes: Number(section.log_max_bytes || 5 * 1024 * 1024),
+    deepLinkBase:
+      String(process.env.MINIAPP_DEEPLINK || section.deep_link_base || '') ||
+      null,
   };
 
   return {

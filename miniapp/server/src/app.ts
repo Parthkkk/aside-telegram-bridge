@@ -7,6 +7,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
@@ -92,6 +93,9 @@ import { SoftConfirmStore, defaultSoftConfirmPath } from './softconfirm.js';
 import { TurnRunner } from './exec.js';
 import { WatcherRegistry } from './watcher.js';
 import { attachWebSocket } from './ws.js';
+import { ActiveViewers } from './viewers.js';
+import { Notifier, LONG_RUNNING_THRESHOLD_MS } from './notify.js';
+import type { ThreadItem } from './thread.js';
 
 const MAX_MESSAGE_CHARS = 32_000;
 const DEFAULT_ENTRY_LIMIT = 800;
@@ -296,6 +300,107 @@ export async function buildServer(
         modelLabel(catalog, provider, modelId),
       ),
     );
+  });
+
+  // --- Day 2: outbound pushes for a turn nobody is watching --------------
+  // Reference-counts who is actively subscribed over the WS, so a push
+  // never duplicates what is already on screen (plan 6.6).
+  const viewers = new ActiveViewers();
+  const notifier = new Notifier({
+    botToken: config.botToken,
+    chatId: config.allowedUserId,
+    stateDir: config.miniapp.stateDir,
+    deepLinkBase: config.miniapp.deepLinkBase,
+    isBeingViewed: (sessionId) => viewers.isActive(sessionId),
+    onError: (context, err) =>
+      app.log.warn({ err, context }, 'notify failed'),
+  });
+
+  /** The last final-answer bubble's text, trimmed for a push notification. */
+  function lastAssistantSummary(items: ThreadItem[]): string {
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      const item = items[i];
+      if (item.kind !== 'answer') continue;
+      const text = String(item.text || '').replace(/\s+/g, ' ').trim();
+      return text.length > 240 ? `${text.slice(0, 239)}…` : text;
+    }
+    return '';
+  }
+
+  const longRunningTimers = new Map<string, NodeJS.Timeout>();
+
+  runner.on('turn_started', (turn) => {
+    notifier.beginTurn(turn.sessionId, turn.startedAt);
+    const existingTimer = longRunningTimers.get(turn.sessionId);
+    if (existingTimer) clearTimeout(existingTimer);
+    const timer = setTimeout(() => {
+      longRunningTimers.delete(turn.sessionId);
+      if (!runner.isBusy(turn.sessionId)) return;
+      void fetchSession(facade, turn.sessionId).then(
+        (session) => {
+          void notifier.notifyLongRunning(
+            { id: turn.sessionId, title: session?.title || 'Session' },
+            Date.now() - turn.startedAt,
+          );
+        },
+        () => {},
+      );
+    }, LONG_RUNNING_THRESHOLD_MS);
+    timer.unref?.();
+    longRunningTimers.set(turn.sessionId, timer);
+  });
+
+  runner.on('turn_finished', (turn) => {
+    const existingTimer = longRunningTimers.get(turn.sessionId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      longRunningTimers.delete(turn.sessionId);
+    }
+    // A stopped turn is the user's own deliberate tap -- nothing to say
+    // that they do not already know. Everything else is worth a push.
+    if (turn.stopped) return;
+    void (async () => {
+      try {
+        const session = await fetchSession(facade, turn.sessionId).catch(
+          () => null,
+        );
+        const notifySession = { id: turn.sessionId, title: session?.title || 'Session' };
+
+        if (turn.alert && !turn.suspended) {
+          await notifier.notifyError(notifySession, turn.alert);
+          return;
+        }
+
+        const msgFile = sessionMsgFile(config.sessionsDir, turn.sessionId);
+        if (msgFile && fs.existsSync(msgFile)) {
+          const snapshot = threads.build(
+            turn.sessionId,
+            msgFile,
+            false,
+            subagents.snapshot(turn.sessionId, false),
+          );
+          const last = snapshot.items[snapshot.items.length - 1];
+          if (
+            last &&
+            last.kind === 'question' &&
+            last.status === 'pending' &&
+            last.answerable &&
+            last.questions[0]
+          ) {
+            await notifier.notifyBlocked(notifySession, last.questions[0], last.id);
+            return;
+          }
+          await notifier.notifyFinished(
+            notifySession,
+            lastAssistantSummary(snapshot.items),
+          );
+          return;
+        }
+        await notifier.notifyFinished(notifySession, '');
+      } catch (err) {
+        app.log.warn({ err }, 'turn_finished notify failed');
+      }
+    })();
   });
 
   await app.register(rateLimit, {
@@ -1410,6 +1515,103 @@ export async function buildServer(
     });
   }
 
+  /**
+   * Inbound side of the Day 2 control loop (plan 6.2/6.3).
+   *
+   * bridge.py owns the ONLY `getUpdates` poller against this bot token
+   * (see 4.2 -- a second poller steals the first one's updates). When a
+   * tap lands on one of THIS app's push notifications, bridge.py relays
+   * the callback data here rather than acting on it itself.
+   *
+   * Gated by loopback origin plus a shared secret -- the same HS256
+   * signing secret this server already keeps at `config.secretPath` --
+   * rather than a bearer JWT, because the caller is a local process on the
+   * same machine, not a phone that went through /api/auth.
+   */
+  app.post('/api/internal/callback', async (request, reply) => {
+    const ip = String(request.ip || '');
+    const fromLoopback =
+      ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+    if (!fromLoopback) {
+      return reply.code(403).send({ error: 'forbidden' });
+    }
+    const given = Buffer.from(String(request.headers['x-internal-secret'] || ''));
+    const expected = Buffer.from(opts.jwtSecret);
+    const authorized =
+      given.length === expected.length && crypto.timingSafeEqual(given, expected);
+    if (!authorized) {
+      return reply.code(403).send({ error: 'forbidden' });
+    }
+
+    const body = (request.body || {}) as { data?: string };
+    const data = String(body.data || '');
+
+    if (data.startsWith('stop:')) {
+      const id = data.slice('stop:'.length);
+      if (!isValidSessionId(id)) {
+        return reply.code(400).send({ error: 'bad_session_id' });
+      }
+      const stopped = runner.stop(id);
+      if (stopped) void notifier.resolveInPlace(id, '⏹ Stopped from Telegram.');
+      return { ok: true, stopped };
+    }
+
+    if (data.startsWith('q:')) {
+      const [, sessionId, questionId, indexRaw] = data.split(':');
+      if (!sessionId || !isValidSessionId(sessionId)) {
+        return reply.code(400).send({ error: 'bad_session_id' });
+      }
+      const msgFile = sessionMsgFile(config.sessionsDir, sessionId);
+      if (!msgFile || !fs.existsSync(msgFile)) {
+        return reply.code(404).send({ error: 'session_not_found' });
+      }
+      const busy = runner.isBusy(sessionId);
+      const snapshot = threads.build(
+        sessionId,
+        msgFile,
+        busy,
+        subagents.snapshot(sessionId, busy),
+      );
+      const item = snapshot.items.find(
+        (candidate) => candidate.kind === 'question' && candidate.id === questionId,
+      );
+      if (
+        !item ||
+        item.kind !== 'question' ||
+        item.status !== 'pending' ||
+        !item.answerable
+      ) {
+        // Already answered -- most likely from the mini app itself while
+        // the push was in flight -- or stale. Say so instead of
+        // double-sending a follow-up the agent never asked for again.
+        void notifier.resolveInPlace(
+          sessionId,
+          'This question was already answered.',
+        );
+        return { ok: true, stale: true };
+      }
+      const block = item.questions[0];
+      const option = block?.options[Number(indexRaw)];
+      if (!block || !option) {
+        return reply.code(400).send({ error: 'bad_option' });
+      }
+      runner.send(sessionId, {
+        text: withReminder(answerMessage(block.header, option.label), {
+          strictConfirm: softConfirm.has(sessionId),
+        }),
+        model: runner.resolveModel(undefined),
+        effort: runner.resolveEffort(undefined),
+      });
+      void notifier.resolveInPlace(
+        sessionId,
+        `${block.header ? `${block.header}: ` : ''}${option.label} ✓`,
+      );
+      return { ok: true };
+    }
+
+    return reply.code(400).send({ error: 'unknown_callback' });
+  });
+
   attachWebSocket({
     app,
     config,
@@ -1418,6 +1620,7 @@ export async function buildServer(
     threads,
     subagents,
     jwtSecret: opts.jwtSecret,
+    viewers,
   });
 
   app.addHook('onClose', async () => {
