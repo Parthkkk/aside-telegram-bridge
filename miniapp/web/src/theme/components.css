@@ -367,6 +367,37 @@
   flex: none;
 }
 
+/* A session stuck on the user -- amber, distinct from the sky unread dot. */
+.waiting-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--state-waiting);
+  flex: none;
+}
+
+.session-waiting-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--state-waiting);
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* Waiting rows get a faint amber wash so they read as a group at the top. */
+.session-row.is-waiting,
+.session-card.is-waiting {
+  background: color-mix(in oklab, var(--state-waiting) 6%, transparent);
+}
+
+.session-row.is-waiting:active,
+.session-card.is-waiting:active {
+  background: color-mix(in oklab, var(--state-waiting) 12%, transparent);
+}
+
 /* --- session cards (Card view) ------------------------------------------- */
 
 .session-cards {
@@ -987,6 +1018,31 @@
   line-height: var(--leading-relaxed);
 }
 
+/*
+ * Shiki-highlighted code blocks (CodeBlock.tsx). Shiki renders its own
+ * `<pre class="shiki">`, complete with a baked-in `background-color`
+ * inline style per theme -- this app's own card chrome (border-radius,
+ * padding, the muted background token) stays the visual frame, so the
+ * inline background is neutralised here rather than left to fight with
+ * it. Per-token colours are untouched: those come from the theme JSON via
+ * inline `color` styles on individual spans, which this does not touch.
+ */
+.md-pre-shiki {
+  margin: 0 0 12px;
+  border-radius: var(--radius-xl);
+  background: var(--muted);
+  overflow-x: auto;
+}
+
+.md-pre-shiki pre.shiki {
+  margin: 0;
+  padding: 11px 12px;
+  background-color: transparent !important;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+}
+
 .md a {
   color: var(--brand);
   text-decoration: none;
@@ -1539,6 +1595,15 @@
 
 .badge.is-muted {
   color: var(--surface-tertiary-foreground);
+}
+
+/* The mute toggle row reuses the panel-row layout but is a toggle, not a nav row. */
+.mute-row {
+  cursor: pointer;
+}
+
+.mute-row:disabled {
+  opacity: 0.5;
 }
 
 /* --- file viewer --------------------------------------------------------- */
@@ -2451,7 +2516,25 @@
   flex: none;
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
   min-height: 34px;
+}
+
+/* Count of sessions waiting on the user. Amber to match the dot on the row. */
+.waiting-badge {
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-white);
+  background: var(--state-waiting);
+  border-radius: 999px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
 }
 
 .rest-hero {

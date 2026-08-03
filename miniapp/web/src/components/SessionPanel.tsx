@@ -7,6 +7,7 @@ import { TodoProgress } from './TodoSection';
 import { api } from '../api';
 import { formatBytes } from '../utils/format';
 import { relativeTime } from '../utils/time';
+import { haptic } from '../telegram';
 import type { ArtifactFile, ArtifactGroup, ChildSession, Todo } from '../types';
 
 const GROUP_LABELS: Record<ArtifactGroup, string> = {
@@ -27,6 +28,8 @@ export function SessionPanel({
   sessionId,
   subagents,
   todos,
+  muted,
+  onToggleMute,
   onInspectSubagent,
   onClose,
 }: {
@@ -34,6 +37,10 @@ export function SessionPanel({
   subagents: ChildSession[];
   /** The agent's task list, drawn as "Task progress" at the bottom. */
   todos: Todo[];
+  /** Current mute state, from the thread payload. */
+  muted: boolean;
+  /** Toggle mute on/off; the panel does the API call and calls this to reflect. */
+  onToggleMute: (next: boolean) => void;
   onInspectSubagent: (childId: string, title: string) => void;
   onClose: () => void;
 }) {
@@ -56,6 +63,31 @@ export function SessionPanel({
   }, [sessionId]);
 
   const populated = (groups ?? []).filter((group) => group.files.length);
+
+  const [muting, setMuting] = useState(false);
+
+  // Single toggle: 24h mute on, unmute off. Keeping it at one button rather
+  // than a duration picker -- muting is low-stakes and easily reversible.
+  const toggleMute = async () => {
+    haptic('light');
+    setMuting(true);
+    try {
+      if (muted) {
+        onToggleMute(false);
+        await api.unmute(sessionId);
+      } else {
+        onToggleMute(true);
+        await api.mute(sessionId);
+      }
+    } catch {
+      // Revert the optimistic update.
+      onToggleMute(muted);
+    } finally {
+      setMuting(false);
+    }
+  };
+
+
 
   return (
     <>
@@ -85,6 +117,24 @@ export function SessionPanel({
           ) : (
             <p className="panel-empty">No subagents in this session.</p>
           )}
+        </section>
+
+        <section className="panel-section">
+          <h3 className="panel-heading">Notifications</h3>
+          <button
+            type="button"
+            className="panel-row mute-row"
+            onClick={toggleMute}
+            disabled={muting}
+          >
+            <span className={muted ? 'switch is-on' : 'switch'} aria-hidden="true">
+              <span className="switch-knob" />
+            </span>
+            <span className="panel-row-name">
+              {muted ? 'Muted (24h)' : 'Notifications on'}
+            </span>
+            {muting ? <Spinner size={13} /> : null}
+          </button>
         </section>
 
         <section className="panel-section">

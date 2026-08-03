@@ -28,6 +28,11 @@ interface SafeAreaInset {
   right: number;
 }
 
+interface WebAppInitDataUnsafe {
+  user?: WebAppUser;
+  start_param?: string;
+}
+
 interface WebAppBottomButton {
   text: string;
   isVisible: boolean;
@@ -80,7 +85,7 @@ interface WebAppPopupButton {
 
 interface TelegramWebApp {
   initData: string;
-  initDataUnsafe?: { user?: WebAppUser };
+  initDataUnsafe?: WebAppInitDataUnsafe;
   colorScheme?: 'light' | 'dark';
   themeParams?: Record<string, string>;
   isExpanded?: boolean;
@@ -160,6 +165,25 @@ export function readInitData(): string | null {
 
   const stored = sessionStorage.getItem('miniapp.initData');
   return stored || null;
+}
+
+/**
+ * Deep-link launch parameter. Push notifications carry
+ * `startapp=session_<id>`, and this lets the app open directly into that
+ * thread on boot -- one tap from the notification shade to the conversation.
+ *
+ * In Telegram it lives on `initDataUnsafe.start_param`. In the dev tunnel
+ * it is parsed from the raw initData query string's `tgWebAppStartParam`,
+ * which is where Telegram puts it before signing.
+ */
+export function readStartParam(): string | null {
+  const fromTelegram = webApp()?.initDataUnsafe?.start_param;
+  if (fromTelegram) return fromTelegram;
+
+  const raw = readInitData();
+  if (!raw) return null;
+  const params = new URLSearchParams(raw);
+  return params.get('tgWebAppStartParam');
 }
 
 /**

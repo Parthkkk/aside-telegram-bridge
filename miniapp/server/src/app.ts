@@ -96,6 +96,15 @@ import { attachWebSocket } from './ws.js';
 import { ActiveViewers } from './viewers.js';
 import { Notifier, LONG_RUNNING_THRESHOLD_MS } from './notify.js';
 import type { ThreadItem } from './thread.js';
+import {
+  BrowserError,
+  CaptureGate,
+  captureTab,
+  closeTab as closeBrowserTab,
+  listTabs,
+  openNewTab,
+  snapshotTab,
+} from './browser.js';
 
 const MAX_MESSAGE_CHARS = 32_000;
 const DEFAULT_ENTRY_LIMIT = 800;
@@ -327,6 +336,52 @@ export async function buildServer(
     return '';
   }
 
+  /** Tool names this codebase's browser-driving steps show up under. Kept as a loose keyword match rather than an exact enum -- the exact tool registry lives outside this server, and a false negative (skipping a thumbnail) is a far cheaper mistake than a false positive (capturing an unrelated tab). */
+  const BROWSER_TOOL_HINTS = [
+    'browser',
+    'tab',
+    'snapshot',
+    'screenshot',
+    'navigate',
+    'click',
+    'scroll',
+    'openurl',
+    'open_tab',
+  ];
+
+  function turnTouchedBrowser(items: ThreadItem[]): boolean {
+    for (const item of items) {
+      if (item.kind !== 'work') continue;
+      for (const workItem of item.items) {
+        if (workItem.kind !== 'step') continue;
+        const tool = String(workItem.tool || '').toLowerCase();
+        if (BROWSER_TOOL_HINTS.some((hint) => tool.includes(hint))) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Plan 7.5: if the turn drove the browser, the completion push carries
+   * visual proof. Best-effort in every direction -- no open tabs, a
+   * capture failure, anything -- just means the plain text notice ships
+   * instead, never a broken push.
+   */
+  async function captureCompletionThumbnail(
+    items: ThreadItem[],
+  ): Promise<string | null> {
+    if (!turnTouchedBrowser(items)) return null;
+    try {
+      const tabs = await listTabs(facade);
+      const target = tabs.find((tab) => tab.active) || tabs[0];
+      if (!target) return null;
+      const result = await captureTab(facade, target.targetId, { quality: 55 });
+      return result.base64;
+    } catch {
+      return null;
+    }
+  }
+
   const longRunningTimers = new Map<string, NodeJS.Timeout>();
 
   runner.on('turn_started', (turn) => {
@@ -391,10 +446,13 @@ export async function buildServer(
             await notifier.notifyBlocked(notifySession, last.questions[0], last.id);
             return;
           }
-          await notifier.notifyFinished(
-            notifySession,
-            lastAssistantSummary(snapshot.items),
-          );
+          const summary = lastAssistantSummary(snapshot.items);
+          const thumbnail = await captureCompletionThumbnail(snapshot.items);
+          if (thumbnail) {
+            await notifier.notifyFinishedWithPhoto(notifySession, summary, thumbnail);
+          } else {
+            await notifier.notifyFinished(notifySession, summary);
+          }
           return;
         }
         await notifier.notifyFinished(notifySession, '');
@@ -1651,6 +1709,108 @@ export async function buildServer(
 
     return reply.code(400).send({ error: 'unknown_callback' });
   });
+
+  // --- Day 3: the browser surfaces (plan section 7) ----------------------
+  // Every route here goes through the same facade every read in this file
+  // already uses -- no new transport, no new failure mode.
+  const captureGate = new CaptureGate();
+
+  const isValidTargetId = (value: unknown): value is string =>
+    typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
+
+  const sendBrowserError = (reply: any, err: unknown) => {
+    if (err instanceof BrowserError) {
+      const status =
+        err.code === 'bad_url'
+          ? 400
+          : err.code === 'not_found'
+            ? 404
+            : err.code === 'rate_limited'
+              ? 429
+              : err.code === 'capture_busy'
+                ? 409
+                : 502;
+      return reply.code(status).send({ error: err.code, message: err.message });
+    }
+    app.log.warn({ err }, 'browser route failed');
+    return reply.code(502).send({ error: 'upstream' });
+  };
+
+  app.get('/api/tabs', { preHandler: requireAuth }, async () => ({
+    tabs: await listTabs(facade),
+  }));
+
+  app.post(
+    '/api/tabs',
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const body = (request.body || {}) as { url?: string };
+      try {
+        const opened = await openNewTab(facade, String(body.url || ''));
+        return opened;
+      } catch (err) {
+        return sendBrowserError(reply, err);
+      }
+    },
+  );
+
+  app.delete(
+    '/api/tabs/:targetId',
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { targetId } = request.params as { targetId: string };
+      if (!isValidTargetId(targetId)) {
+        return reply.code(400).send({ error: 'bad_target_id' });
+      }
+      try {
+        const closed = await closeBrowserTab(facade, targetId);
+        return { closed };
+      } catch (err) {
+        return sendBrowserError(reply, err);
+      }
+    },
+  );
+
+  app.get(
+    '/api/tabs/:targetId/capture',
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { targetId } = request.params as { targetId: string };
+      if (!isValidTargetId(targetId)) {
+        return reply.code(400).send({ error: 'bad_target_id' });
+      }
+      const query = request.query as { q?: string };
+      const quality = Number(query.q) || undefined;
+      try {
+        const result = await captureGate.run(targetId, () =>
+          captureTab(facade, targetId, { quality }),
+        );
+        return {
+          dataUrl: `data:image/webp;base64,${result.base64}`,
+          url: result.url,
+          capturedAt: result.capturedAt,
+        };
+      } catch (err) {
+        return sendBrowserError(reply, err);
+      }
+    },
+  );
+
+  app.get(
+    '/api/tabs/:targetId/snapshot',
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { targetId } = request.params as { targetId: string };
+      if (!isValidTargetId(targetId)) {
+        return reply.code(400).send({ error: 'bad_target_id' });
+      }
+      try {
+        return await snapshotTab(facade, targetId);
+      } catch (err) {
+        return sendBrowserError(reply, err);
+      }
+    },
+  );
 
   attachWebSocket({
     app,

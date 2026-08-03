@@ -36,6 +36,7 @@ import {
   initTelegram,
   onThemeChanged,
   readInitData,
+  readStartParam,
   stashDevInitData,
 } from './telegram';
 import type { SessionRow, StatusResponse } from './types';
@@ -97,6 +98,9 @@ export default function App() {
   const [sending, setSending] = useState(false);
   /** The Settings screen, opened from the model picker's Settings row. */
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  /** Sessions waiting on the user, surfaced as a badge near the topbar. */
+  const waitingCount = sessions.filter((s) => s.waiting).length;
 
   const attachments = useAttachments();
 
@@ -214,13 +218,22 @@ export default function App() {
     }
   }, [loadSessions, attachments, stack.length]);
 
-  // Cold-boot continuity: land back on whatever thread was open, once,
-  // right after the first sessions load. `CloudStorage` is per-account and
-  // survives a reinstall; it never carries anything sensitive.
+  // Deep-link continuity: land on the specific thread a push notification
+  // pointed at, else whatever thread was open last. The deep link wins
+  // because a fresh notification tap is a more specific intent than "wherever
+  // I left off". The ref guard prevents a double-open when both fire.
   const restoredThread = useRef(false);
   useEffect(() => {
     if (auth.phase !== 'ready' || restoredThread.current) return;
     restoredThread.current = true;
+    const startParam = readStartParam();
+    if (startParam && startParam.startsWith('session_')) {
+      const id = startParam.slice('session_'.length);
+      if (id) {
+        openThread({ id });
+        return;
+      }
+    }
     void cloudStorage.getItem('lastSessionId').then((id) => {
       if (id) openThread({ id });
     });
@@ -384,6 +397,9 @@ export default function App() {
               the resting panel now has a reason to exist.
             */}
             <div className="home-topbar">
+              {waitingCount > 0 ? (
+                <span className="waiting-badge" aria-label={`${waitingCount} waiting`}>{waitingCount}</span>
+              ) : null}
               <button
                 type="button"
                 className="icon-button"
@@ -737,6 +753,7 @@ function ThreadScreen({
           onAnswer={answer}
           onRecover={recover}
           busy={sending || thread.busy}
+          scrollElementRef={scroller}
         />
 
         {/*
@@ -797,6 +814,8 @@ function ThreadScreen({
           sessionId={sessionId}
           subagents={thread.subagents}
           todos={thread.todos}
+          muted={thread.muted}
+          onToggleMute={(next) => thread.setMuted(next)}
           onInspectSubagent={(childId) => {
             setPanelOpen(false);
             onInspectSubagent(childId, thread.title);

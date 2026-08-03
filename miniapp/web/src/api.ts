@@ -150,6 +150,23 @@ export const api = {
     ),
 
   /**
+   * Mute push notifications for a session. `hours` defaults to 24,
+   * clamped server-side to 1..720.
+   */
+  mute: (sessionId: string, hours?: number) =>
+    request<{ ok: boolean; mutedForHours: number }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/mute`,
+      { method: 'POST', body: JSON.stringify(hours ? { hours } : {}) },
+    ),
+
+  /** Unmute push notifications for a session. */
+  unmute: (sessionId: string) =>
+    request<{ ok: boolean }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/unmute`,
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
+
+  /**
    * Upload files. `sessionId` is optional -- the home composer has no
    * session yet, and the paths are handed back either way.
    */

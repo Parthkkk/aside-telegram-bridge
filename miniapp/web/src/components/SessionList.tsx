@@ -46,7 +46,15 @@ export function SessionList({ sessions, onOpen, loading }: SessionListProps) {
             s.preview.toLowerCase().includes(q),
         )
       : sessions;
-    return oldestFirst ? [...filtered].reverse() : filtered;
+    // Waiting sessions sort above everything else; a push notification
+    // tap is the most specific intent, and a stuck session should never
+    // sit below idle history.
+    const sorted = [...filtered].sort((a, b) => {
+      if (a.waiting && !b.waiting) return -1;
+      if (!a.waiting && b.waiting) return 1;
+      return 0;
+    });
+    return oldestFirst ? sorted.reverse() : sorted;
   }, [sessions, query, oldestFirst]);
 
   const choose = (next: SessionView) => {
@@ -134,11 +142,19 @@ export function SessionList({ sessions, onOpen, loading }: SessionListProps) {
             <button
               key={session.id}
               type="button"
-              className="session-row"
+              className={`session-row${session.waiting ? ' is-waiting' : ''}`}
               onClick={() => open(session.id)}
             >
               <span className="session-row-main">
-                <span className="session-row-title">{session.title}</span>
+                <span className="session-row-title">
+                  {session.waiting ? (
+                    <span className="session-waiting-label">
+                      <span className="waiting-dot" />
+                      Waiting on you
+                    </span>
+                  ) : null}
+                  {session.title}
+                </span>
                 <span className="session-row-time">
                   {relativeTime(session.updatedAt)}
                 </span>
@@ -156,11 +172,17 @@ export function SessionList({ sessions, onOpen, loading }: SessionListProps) {
             <button
               key={session.id}
               type="button"
-              className="session-card"
+              className={`session-card${session.waiting ? ' is-waiting' : ''}`}
               onClick={() => open(session.id)}
             >
               <span className="session-card-head">
                 <span className="session-card-time">
+                  {session.waiting ? (
+                    <span className="session-waiting-label">
+                      <span className="waiting-dot" />
+                      Waiting on you
+                    </span>
+                  ) : null}
                   {relativeTime(session.updatedAt)}
                 </span>
                 {session.status === 'running' ? <Spinner size={13} /> : null}

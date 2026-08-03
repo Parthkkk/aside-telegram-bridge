@@ -160,14 +160,12 @@
    */
   --page: oklch(97.3% 0.004 92);
 
-  /* The warm accent, used only for the home mark. */
-  /*
-   * Clay, not rust. At 0.118 chroma on hue 40 the mark read as signal red,
-   * and the Aside symbol is a circle with a diagonal through it -- in red
-   * that shape says "prohibited", not "brand". Pulling chroma down and
-   * hue toward amber keeps the warmth without the warning.
-   */
+  /* The one accent the home mark uses. */
   --mark-warm: oklch(63% 0.088 52);
+
+  /* --- state colors (semantic, not literal) ------------------------- */
+  /* A session waiting on the user -- amber, distinct from the sky unread dot. */
+  --state-waiting: var(--color-amber-500);
 
   /* Ultrabrowse renders as rainbow text; these are its stops. */
   --ultrabrowse-red: var(--color-red-500);
@@ -219,6 +217,9 @@
 
   --page: var(--color-neutral-900);
   --mark-warm: oklch(72% 0.105 45);
+
+  /* --- state colors (semantic, not literal) ------------------------- */
+  --state-waiting: var(--color-amber-400);
 
   --ultrabrowse-red: var(--color-red-400);
   --ultrabrowse-orange: var(--color-orange-400);

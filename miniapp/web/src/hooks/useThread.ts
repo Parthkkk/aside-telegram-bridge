@@ -107,6 +107,10 @@ export interface ThreadState {
     permissionMode: string | null;
     finalConfirm: boolean | null;
   }) => void;
+  /** Current mute state for push notifications. */
+  muted: boolean;
+  /** Reflect a mute/unmute without waiting for a refetch. */
+  setMuted: (next: boolean) => void;
 }
 
 /** Apply a tail delta: keep the prefix, replace everything from `fromIndex`. */
@@ -365,5 +369,8 @@ export function useThread(sessionId: string): ThreadState {
     addPending: (message) => setPending(message),
     applyPermission: (next) =>
       setMeta((prev) => (prev ? { ...prev, ...next } : prev)),
+    muted: meta?.muted ?? false,
+    setMuted: (next) =>
+      setMeta((prev) => (prev ? { ...prev, muted: next } : prev)),
   };
 }

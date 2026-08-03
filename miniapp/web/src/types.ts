@@ -325,6 +325,8 @@ export interface ThreadResponse {
   permission: string | null;
   /** The raw enum (`guard`, `full-access`, …) the picker checkmarks. */
   permissionMode: string | null;
+  /** Whether this session is currently muted from push notifications. */
+  muted: boolean;
   /**
    * What the confirm-before-acting switch shows.
    *
@@ -378,6 +380,8 @@ export interface SessionRow {
   createdAt: number;
   unread: boolean;
   trigger?: string;
+  /** Suspended on a native question or sitting on an unanswered soft-marker question. */
+  waiting?: boolean;
 }
 
 // --- status / catalog ----------------------------------------------------

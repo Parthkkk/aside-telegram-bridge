@@ -2,6 +2,8 @@ import { memo, useEffect, useMemo, useState } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api } from '../api';
+import { CodeBlock } from './CodeBlock';
+import { normalizeLang, warmHighlighter } from '../utils/highlighter';
 import {
   citationIndexFrom,
   dropPartialCitation,
@@ -99,6 +101,17 @@ export const Markdown = memo(function Markdown({
     return transformCitations(body, (ref) => Boolean(sources?.[ref]));
   }, [text, streaming, sources]);
 
+  // Kicks off Shiki's lazy load after first paint, not at module scope --
+  // importing this component never costs anything until a message has
+  // actually rendered. `warmHighlighter` is idempotent (see
+  // utils/highlighter.ts), so calling it from every mounted `Markdown`
+  // instance -- and there is one per thread item -- costs nothing beyond
+  // the first real call.
+  useEffect(() => {
+    const id = window.setTimeout(() => warmHighlighter(), 0);
+    return () => window.clearTimeout(id);
+  }, []);
+
   const imageRenderer = useMemo(
     () =>
       function MarkdownImageSlot({ src, alt }: { src?: unknown; alt?: unknown }) {
@@ -138,6 +151,25 @@ export const Markdown = memo(function Markdown({
           // remounts every image, losing the "this one failed" state and
           // re-requesting the file each time the streaming answer ticks.
           img: imageRenderer,
+          // `CodeBlock` renders its OWN `<pre>` (plain, or Shiki's), so the
+          // default `pre` wrapper is passed through unwrapped here rather
+          // than nesting a second `<pre>` around it. Inline code (no fence,
+          // no language) is untouched -- rendered exactly as before.
+          pre: ({ children }) => <>{children}</>,
+          code: ({ className, children }) => {
+            const match = /language-(\S+)/.exec(className || '');
+            const text = String(children ?? '').replace(/\n$/, '');
+            if (!match) return <code className="md-inline-code">{children}</code>;
+            const lang = normalizeLang(match[1]);
+            if (!lang) {
+              return (
+                <pre className="md-pre">
+                  <code className="md-code">{text}</code>
+                </pre>
+              );
+            }
+            return <CodeBlock code={text} lang={lang} />;
+          },
           a: ({ node: _node, href, children, ...props }) => {
             const index = citationIndexFrom(String(href || ''));
             if (index === null) {

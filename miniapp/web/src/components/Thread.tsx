@@ -21,6 +21,8 @@
  *    through the same markdown renderer as the finished answer so there is
  *    no reflow when the two swap.
  */
+import { useRef, type RefObject } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import type {
   Attachment,
   ChildSteps,
@@ -91,17 +93,7 @@ export function foldIsLive(items: ThreadItem[], index: number): boolean {
   );
 }
 
-export function Thread({
-  items,
-  sessionId,
-  sources,
-  subagentSteps,
-  onInspectSubagent,
-  onOpenCitation,
-  onAnswer,
-  onRecover,
-  busy,
-}: {
+export interface ThreadProps {
   items: ThreadItem[];
   /** Whose thread this is -- local image paths resolve against it. */
   sessionId: string;
@@ -120,63 +112,143 @@ export function Thread({
   onRecover?: (label: string) => Promise<void>;
   /** A send is in flight, so question cards hold their buttons. */
   busy?: boolean;
-}) {
+  /**
+   * The SAME element App.tsx already scrolls (`.thread-scroll`, ref
+   * `scroller` there) and pins to the bottom of during streaming.
+   *
+   * Virtualization needs to know the real scroll container to measure
+   * against, but it must not become a SECOND scrollable element -- Day 1
+   * plan 5.7 asks for the existing container to stay the only one, and
+   * App.tsx's own pin-to-bottom effect (`el.scrollTop = el.scrollHeight`)
+   * already assumes there is exactly one. react-virtual is fine with this:
+   * it only needs a ref to the scrolling ancestor, not ownership of it.
+   */
+  scrollElementRef: RefObject<HTMLDivElement | null>;
+}
+
+/**
+ * A rendered thread item does not carry its own key/height -- `Thread`
+ * used to be a flat `.map()`. Pulled out unchanged into its own function so
+ * the virtualizer can call it per visible row instead of for the whole
+ * list at once.
+ */
+function renderItem(
+  item: ThreadItem,
+  index: number,
+  items: ThreadItem[],
+  props: ThreadProps,
+) {
+  if (item.kind === 'user') {
+    return (
+      <div className={`user-bubble ${item.pending ? 'is-pending' : ''}`}>
+        {item.attachments?.length ? (
+          <BubbleAttachments files={item.attachments} />
+        ) : null}
+        {item.text}
+      </div>
+    );
+  }
+  if (item.kind === 'work') {
+    return (
+      <WorkFold
+        block={item}
+        sessionId={props.sessionId}
+        live={foldIsLive(items, index)}
+        subagentSteps={props.subagentSteps}
+        onInspectSubagent={props.onInspectSubagent}
+        sources={props.sources}
+        onOpenCitation={props.onOpenCitation}
+      />
+    );
+  }
+  if (item.kind === 'error') {
+    return <ErrorCard alert={item.alert} />;
+  }
+  if (item.kind === 'question') {
+    return (
+      <QuestionCard
+        item={item}
+        busy={props.busy}
+        onAnswer={props.onAnswer}
+        onRecover={props.onRecover}
+      />
+    );
+  }
   return (
-    <div className="thread">
-      {items.map((item, index) => {
-        if (item.kind === 'user') {
+    <div className="answer">
+      <Markdown
+        text={item.text}
+        streaming={item.kind === 'streaming'}
+        sources={props.sources}
+        sessionId={props.sessionId}
+        onOpenCitation={props.onOpenCitation}
+      />
+    </div>
+  );
+}
+
+export function Thread(props: ThreadProps) {
+  const { items } = props;
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Item heights vary enormously -- a one-line answer next to a work fold
+   * with a whole tool-call timeline -- so this is dynamic measurement, not
+   * a fixed row height. `estimateSize` only has to be a plausible guess for
+   * the FIRST layout pass; `measureElement` (wired below via the ref
+   * callback) corrects it against the real rendered height afterward, and
+   * on every resize (a streaming answer growing token by token included --
+   * that resizes the mounted element, which triggers react-virtual's own
+   * ResizeObserver).
+   *
+   * `overscan: 6` and `scrollMargin` matching this component's own offset
+   * within `.thread-scroll` are both from the Day 1 plan's 5.7. The offset
+   * matters because `.thread-scroll` can render a loading/error paragraph
+   * ABOVE this component -- without `scrollMargin` the virtualizer would
+   * assume its content starts at the scroll container's own top edge.
+   */
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => props.scrollElementRef.current,
+    estimateSize: () => 80,
+    overscan: 6,
+    getItemKey: (index) => items[index].id,
+    scrollMargin: containerRef.current?.offsetTop ?? 0,
+  });
+
+  const virtualItems = virtualizer.getVirtualItems();
+
+  return (
+    <div className="thread" ref={containerRef}>
+      <div
+        style={{
+          position: 'relative',
+          width: '100%',
+          height: virtualizer.getTotalSize(),
+        }}
+      >
+        {virtualItems.map((virtualRow) => {
+          const item = items[virtualRow.index];
           return (
             <div
-              key={item.id}
-              className={`user-bubble ${item.pending ? 'is-pending' : ''}`}
+              key={virtualRow.key}
+              ref={virtualizer.measureElement}
+              data-index={virtualRow.index}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                transform: `translateY(${
+                  virtualRow.start - virtualizer.options.scrollMargin
+                }px)`,
+              }}
             >
-              {item.attachments?.length ? (
-                <BubbleAttachments files={item.attachments} />
-              ) : null}
-              {item.text}
+              {renderItem(item, virtualRow.index, items, props)}
             </div>
           );
-        }
-        if (item.kind === 'work') {
-          return (
-            <WorkFold
-              key={item.id}
-              block={item}
-              sessionId={sessionId}
-              live={foldIsLive(items, index)}
-              subagentSteps={subagentSteps}
-              onInspectSubagent={onInspectSubagent}
-              sources={sources}
-              onOpenCitation={onOpenCitation}
-            />
-          );
-        }
-        if (item.kind === 'error') {
-          return <ErrorCard key={item.id} alert={item.alert} />;
-        }
-        if (item.kind === 'question') {
-          return (
-            <QuestionCard
-              key={item.id}
-              item={item}
-              busy={busy}
-              onAnswer={onAnswer}
-              onRecover={onRecover}
-            />
-          );
-        }
-        return (
-          <div key={item.id} className="answer">
-            <Markdown
-              text={item.text}
-              streaming={item.kind === 'streaming'}
-              sources={sources}
-              sessionId={sessionId}
-              onOpenCitation={onOpenCitation}
-            />
-          </div>
-        );
-      })}
+        })}
+      </div>
     </div>
   );
 }

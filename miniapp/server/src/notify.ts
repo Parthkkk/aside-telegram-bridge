@@ -311,6 +311,59 @@ export class Notifier {
     await this.sendOrEdit(session.id, lines.join('\n'));
   }
 
+  /**
+   * The Day 3 headline, plan 7.5: if a turn touched the browser, the
+   * completion push carries visual proof of what happened, not just text.
+   * A fresh `sendPhoto` message rather than an edit onto the tracked text
+   * message -- Telegram cannot turn a text message into a photo one via
+   * `editMessageText`, and the turn is already over, so there is nothing
+   * further to coalesce onto it anyway.
+   */
+  async notifyFinishedWithPhoto(
+    session: NotifySession,
+    summary: string,
+    photoWebpBase64: string,
+  ): Promise<void> {
+    if (this.shouldSkip(session.id)) return;
+    const link = this.deepLink(session.id);
+    const lines = [`✅ <b>${escapeHtml(session.title)}</b> finished`];
+    if (summary) lines.push(escapeHtml(summary));
+    if (link) lines.push(link);
+    try {
+      const form = new FormData();
+      form.append('chat_id', String(this.opts.chatId));
+      form.append('caption', lines.join('\n'));
+      form.append('parse_mode', 'HTML');
+      form.append(
+        'photo',
+        new Blob([Buffer.from(photoWebpBase64, 'base64')], {
+          type: 'image/webp',
+        }),
+        'capture.webp',
+      );
+      if (this.opts.call) {
+        // Test injection point: callers that supply `call` get a plain
+        // JSON-shaped invocation instead of a real multipart POST, since
+        // constructing a `FormData` body is not meaningfully testable
+        // through a JSON-based stub anyway.
+        await this.opts.call('sendPhoto', {
+          chat_id: this.opts.chatId,
+          caption: lines.join('\n'),
+        });
+        return;
+      }
+      await fetch(
+        `https://api.telegram.org/bot${this.opts.botToken}/sendPhoto`,
+        { method: 'POST', body: form },
+      );
+    } catch (err) {
+      this.opts.onError?.('notify:notifyFinishedWithPhoto', err);
+      // Fall back to the plain text notice rather than losing the push
+      // entirely because the image failed to send.
+      await this.notifyFinished(session, summary);
+    }
+  }
+
   async notifyError(session: NotifySession, alert: ErrorAlert): Promise<void> {
     if (this.shouldSkip(session.id)) return;
     const link = this.deepLink(session.id);
