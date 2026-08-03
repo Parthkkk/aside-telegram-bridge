@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TranscriptSocket, api } from '../api';
 import { threadErrorText } from '../utils/format';
+import { haptic } from '../telegram';
 import type {
   Attachment,
   ChildSession,
@@ -262,6 +263,9 @@ export function useThread(sessionId: string): ThreadState {
           // question card.
           if (event.alert && !event.stopped && !event.suspended) {
             setAlerts((prev) => [...prev, event.alert!]);
+            haptic('error');
+          } else if (!event.stopped) {
+            haptic('success');
           }
           setLiveBusy(false);
           setStreamText('');

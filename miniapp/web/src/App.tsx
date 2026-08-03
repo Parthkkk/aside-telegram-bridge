@@ -29,6 +29,9 @@ import { resolvePills } from './utils/pills';
 import {
   applyTheme,
   backButton,
+  cloudStorage,
+  disableClosingConfirmation,
+  enableClosingConfirmation,
   haptic,
   initTelegram,
   onThemeChanged,
@@ -192,6 +195,10 @@ export default function App() {
       setStack((prev) => (replace ? [next] : [...prev, next]));
       setDraft('');
       attachments.clear();
+      // Only the root thread counts as "where you left off" -- a subagent
+      // push (replace=false) is a detour, not the place cold boot should
+      // land back on.
+      if (replace) void cloudStorage.setItem('lastSessionId', next.id);
     },
     [attachments],
   );
@@ -201,8 +208,23 @@ export default function App() {
     setStack((prev) => prev.slice(0, -1));
     setDraft('');
     attachments.clear();
-    if (stack.length <= 1) void loadSessions();
+    if (stack.length <= 1) {
+      void loadSessions();
+      void cloudStorage.removeItem('lastSessionId');
+    }
   }, [loadSessions, attachments, stack.length]);
+
+  // Cold-boot continuity: land back on whatever thread was open, once,
+  // right after the first sessions load. `CloudStorage` is per-account and
+  // survives a reinstall; it never carries anything sensitive.
+  const restoredThread = useRef(false);
+  useEffect(() => {
+    if (auth.phase !== 'ready' || restoredThread.current) return;
+    restoredThread.current = true;
+    void cloudStorage.getItem('lastSessionId').then((id) => {
+      if (id) openThread({ id });
+    });
+  }, [auth.phase, openThread]);
 
   useEffect(() => {
     if (!screen) return undefined;
@@ -231,13 +253,13 @@ export default function App() {
     setModelId(nextModel);
     localStorage.setItem(PROVIDER_KEY, nextProvider);
     localStorage.setItem(MODEL_KEY, nextModel);
-    haptic('light');
+    haptic('select');
   };
 
   const pickEffort = (next: string) => {
     setEffort(next);
     localStorage.setItem(EFFORT_KEY, next);
-    haptic('light');
+    haptic('select');
   };
 
   /** The CLI takes `provider/modelId`; a bare id means "daemon default". */
@@ -506,6 +528,15 @@ function ThreadScreen({
   const [sending, setSending] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [citation, setCitation] = useState<CitationMark | null>(null);
+
+  // A stray swipe-to-close should not be able to drop a running turn.
+  // Cleared unconditionally on unmount so leaving the thread never leaves
+  // the confirmation dangling on some other screen.
+  useEffect(() => {
+    if (thread.busy) enableClosingConfirmation();
+    else disableClosingConfirmation();
+    return () => disableClosingConfirmation();
+  }, [thread.busy]);
 
   /**
    * What this thread is actually running.

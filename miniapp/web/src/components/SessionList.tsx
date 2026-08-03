@@ -52,7 +52,7 @@ export function SessionList({ sessions, onOpen, loading }: SessionListProps) {
   const choose = (next: SessionView) => {
     setView(next);
     localStorage.setItem(VIEW_KEY, next);
-    haptic('light');
+    haptic('select');
   };
 
   const open = (id: string) => {

@@ -21,9 +21,9 @@
  * choice, so scrolling back through a thread reads as history rather than
  * as a wall of live prompts.
  */
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, Spinner } from './Icons';
-import { haptic } from '../telegram';
+import { haptic, mainButton, secondaryButton } from '../telegram';
 import type { QuestionBlock, QuestionItem } from '../types';
 
 export interface QuestionCardProps {
@@ -137,6 +137,66 @@ export function QuestionCard({
     }
   };
 
+  // A ref rather than a plain closure, so the native-button bindings below
+  // (which only rebind when the QUESTION text changes, not on every
+  // keystroke-driven render) always call the current `send` -- one that
+  // sees the live `disabled`/`chosen` state instead of whatever it was the
+  // moment the button was bound.
+  const sendRef = useRef(send);
+  sendRef.current = send;
+
+  // A pending question is the one moment this app should interrupt
+  // someone -- fire once per card, not on every re-render.
+  const warnedRef = useRef(false);
+  useEffect(() => {
+    if ((live || recoverable) && !warnedRef.current) {
+      warnedRef.current = true;
+      haptic('warning');
+    }
+  }, [live, recoverable]);
+
+  /**
+   * The common shape -- one block, two options (approve/deny, yes/no) --
+   * gets Telegram's own MainButton/SecondaryButton instead of relying on
+   * the inline row. This is the single strongest "feels native" signal
+   * available (Day 1 plan, 5.3): the OS-level button bar, not a webview
+   * button pretending to be one.
+   */
+  const soleBlock = item.questions.length === 1 ? item.questions[0] : null;
+  const twoOptions =
+    soleBlock && soleBlock.options.length === 2 ? soleBlock.options : null;
+  const [firstOption, secondOption] = twoOptions ?? [];
+
+  useEffect(() => {
+    if (!live || !twoOptions || !soleBlock) return undefined;
+    const header = soleBlock.header;
+    const first = mainButton.bind({
+      text: firstOption!.label,
+      onClick: () => void sendRef.current(header, firstOption!.label),
+    });
+    const second = secondaryButton.bind({
+      text: secondOption!.label,
+      onClick: () => void sendRef.current(header, secondOption!.label),
+    });
+    return () => {
+      first.release();
+      second.release();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live, firstOption?.label, secondOption?.label]);
+
+  useEffect(() => {
+    if (!twoOptions) return;
+    if (sending) mainButton.showLoader();
+    else mainButton.hideLoader();
+  }, [sending, twoOptions]);
+
+  // Native buttons replace the inline row only while they are actually on
+  // screen -- a client without MainButton support (or a settled/historical
+  // card, where the binding above never mounts) keeps the inline row as
+  // the fallback and the permanent record.
+  const nativeButtonsActive = live && Boolean(twoOptions) && mainButton.isSupported();
+
   return (
     <div
       className={`question-card ${settled ? 'is-settled' : ''} ${
@@ -147,12 +207,14 @@ export function QuestionCard({
         <div className="question-block" key={`${block.header}-${index}`}>
           <p className="question-header">{block.header}</p>
           <p className="question-text">{block.question}</p>
-          <Options
-            block={block}
-            disabled={disabled}
-            chosen={chosen}
-            onPick={(label) => void send(block.header, label)}
-          />
+          {nativeButtonsActive ? null : (
+            <Options
+              block={block}
+              disabled={disabled}
+              chosen={chosen}
+              onPick={(label) => void send(block.header, label)}
+            />
+          )}
         </div>
       ))}
 

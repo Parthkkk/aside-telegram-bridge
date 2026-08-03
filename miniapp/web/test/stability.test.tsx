@@ -8,7 +8,7 @@
  * runs, and a task list that starts collapsed.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ErrorCard } from '../src/components/ErrorCard';
 import { QuestionCard } from '../src/components/QuestionCard';
 import { TodoSection, todoSummary } from '../src/components/TodoSection';
@@ -326,11 +326,15 @@ describe('the composer stop control', () => {
     expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
   });
 
-  it('appears while streaming and fires', () => {
+  it('appears while streaming and fires', async () => {
     const onStop = vi.fn();
+    // Stop now confirms natively before it fires -- see telegram.ts
+    // `showConfirm`, which falls back to `window.confirm` outside Telegram.
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     render(<Composer {...composerProps} streaming onStop={onStop} />);
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
-    expect(onStop).toHaveBeenCalled();
+    await waitFor(() => expect(onStop).toHaveBeenCalled());
+    confirmSpy.mockRestore();
   });
 
   it('holds itself while the stop is in flight', () => {

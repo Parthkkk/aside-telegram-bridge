@@ -1,9 +1,18 @@
 /**
  * Thin wrapper over Telegram's WebApp bridge.
  *
- * Every call is a no-op outside Telegram so the exact same build runs in a
- * plain desktop browser, where initData comes from a `#initData=` hash param
- * produced by scripts/dev-initdata.mjs.
+ * Every call is a no-op (or a sane browser fallback) outside Telegram so the
+ * exact same build runs in a plain desktop browser, where initData comes
+ * from a `#initData=` hash param produced by scripts/dev-initdata.mjs.
+ *
+ * This talks to `window.Telegram.WebApp` directly rather than through a
+ * third-party SDK package. Telegram ships and versions that object itself
+ * (`telegram-web-app.js`), so it is the actual source of truth for Bot API
+ * 8.0/9.x features -- fullscreen, safe areas, the second button, native
+ * dialogs, cloud/secure storage, biometrics. A wrapper library only adds a
+ * translation layer on top of the same surface. Every new call below is
+ * capability-checked with a no-op fallback, because `requestFullscreen` and
+ * friends return `UNSUPPORTED` on some clients -- see the Day 1 plan.
  */
 
 interface WebAppUser {
@@ -12,26 +21,117 @@ interface WebAppUser {
   username?: string;
 }
 
+interface SafeAreaInset {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+interface WebAppBottomButton {
+  text: string;
+  isVisible: boolean;
+  isActive: boolean;
+  isProgressVisible: boolean;
+  hasShineEffect?: boolean;
+  setText(text: string): void;
+  onClick(cb: () => void): void;
+  offClick(cb: () => void): void;
+  show(): void;
+  hide(): void;
+  enable(): void;
+  disable(): void;
+  showProgress(leaveActive?: boolean): void;
+  hideProgress(): void;
+  setParams(params: Partial<{
+    text: string;
+    color: string;
+    text_color: string;
+    is_active: boolean;
+    is_visible: boolean;
+    has_shine_effect: boolean;
+  }>): void;
+}
+
+interface WebAppSettingsButton {
+  isVisible: boolean;
+  show(): void;
+  hide(): void;
+  onClick(cb: () => void): void;
+  offClick(cb: () => void): void;
+}
+
+type StorageCallback<T = void> = (error: string | null, result?: T) => void;
+
+interface WebAppCloudStorage {
+  setItem(key: string, value: string, cb?: StorageCallback<boolean>): void;
+  getItem(key: string, cb: StorageCallback<string>): void;
+  getItems(keys: string[], cb: StorageCallback<Record<string, string>>): void;
+  removeItem(key: string, cb?: StorageCallback<boolean>): void;
+  removeItems(keys: string[], cb?: StorageCallback<boolean>): void;
+  getKeys(cb: StorageCallback<string[]>): void;
+}
+
+interface WebAppPopupButton {
+  id?: string;
+  type?: 'default' | 'ok' | 'close' | 'cancel' | 'destructive';
+  text?: string;
+}
+
 interface TelegramWebApp {
   initData: string;
   initDataUnsafe?: { user?: WebAppUser };
   colorScheme?: 'light' | 'dark';
   themeParams?: Record<string, string>;
   isExpanded?: boolean;
+  isFullscreen?: boolean;
+  platform?: string;
+  version?: string;
   ready(): void;
   expand(): void;
   close(): void;
-  onEvent(event: string, handler: () => void): void;
-  offEvent(event: string, handler: () => void): void;
+  onEvent(event: string, handler: (...args: unknown[]) => void): void;
+  offEvent(event: string, handler: (...args: unknown[]) => void): void;
   disableVerticalSwipes?: () => void;
   openLink?: (url: string, options?: { try_instant_view?: boolean }) => void;
   downloadFile?: (params: { url: string; file_name: string }) => void;
+  isVersionAtLeast?: (version: string) => boolean;
+
+  // --- Bot API 8.0: fullscreen and safe areas ---------------------------
+  requestFullscreen?: () => void;
+  exitFullscreen?: () => void;
+  lockOrientation?: () => void;
+  unlockOrientation?: () => void;
+  safeAreaInset?: SafeAreaInset;
+  contentSafeAreaInset?: SafeAreaInset;
+
+  // --- chrome sync -------------------------------------------------------
+  setHeaderColor?: (color: string) => void;
+  setBackgroundColor?: (color: string) => void;
+  setBottomBarColor?: (color: string) => void;
+
+  // --- native dialogs ------------------------------------------------------
+  showPopup?: (
+    params: { title?: string; message: string; buttons?: WebAppPopupButton[] },
+    cb?: (buttonId?: string) => void,
+  ) => void;
+  showAlert?: (message: string, cb?: () => void) => void;
+  showConfirm?: (message: string, cb?: (ok: boolean) => void) => void;
+
+  // --- lifecycle -----------------------------------------------------------
+  enableClosingConfirmation?: () => void;
+  disableClosingConfirmation?: () => void;
+
   BackButton?: {
     show(): void;
     hide(): void;
     onClick(handler: () => void): void;
     offClick(handler: () => void): void;
   };
+  MainButton?: WebAppBottomButton;
+  SecondaryButton?: WebAppBottomButton;
+  SettingsButton?: WebAppSettingsButton;
+  CloudStorage?: WebAppCloudStorage;
   HapticFeedback?: {
     impactOccurred(style: 'light' | 'medium' | 'heavy' | 'soft' | 'rigid'): void;
     notificationOccurred(type: 'error' | 'success' | 'warning'): void;
@@ -83,12 +183,77 @@ export function stashDevInitData(raw: string): void {
   history.replaceState(null, '', location.pathname + location.search);
 }
 
+/**
+ * Boot sequence: signal ready before first paint, expand, go fullscreen,
+ * lock down the vertical swipe-to-close gesture, and start mirroring the
+ * safe-area insets onto CSS custom properties.
+ *
+ * `requestFullscreen` is wrapped because it throws `UNSUPPORTED` synchronously
+ * on some older clients rather than just being absent -- see the Day 1 plan's
+ * note on capability checks.
+ */
 export function initTelegram(): void {
   const app = webApp();
   if (!app) return;
   app.ready();
   app.expand();
   app.disableVerticalSwipes?.();
+  try {
+    app.requestFullscreen?.();
+  } catch {
+    // Falls back to plain `expand()`, already called above.
+  }
+  bindSafeAreaVars();
+}
+
+/** True once the client has actually granted fullscreen (not just asked). */
+export function isFullscreen(): boolean {
+  return Boolean(webApp()?.isFullscreen);
+}
+
+export function exitFullscreen(): void {
+  try {
+    webApp()?.exitFullscreen?.();
+  } catch {
+    // no-op: nothing to fall back to, the app just stays as-is.
+  }
+}
+
+/**
+ * Mirror Telegram's safe-area insets onto CSS variables so fullscreen mode
+ * doesn't put the header under the status bar or the composer under the
+ * home indicator / gesture bar.
+ *
+ * `--shell-safe-*` is the OS chrome (notch, status bar, home indicator).
+ * `--shell-content-*` additionally clears Telegram's own floating chrome
+ * (the mini app header pill in some clients), which is what the in-app
+ * header should actually sit below. Both update live on `safeAreaChanged`
+ * and `contentSafeAreaChanged` -- rotation and multitasking resize these.
+ */
+function applySafeAreaVars(): void {
+  const app = webApp();
+  const root = document.documentElement.style;
+  const safe = app?.safeAreaInset;
+  const content = app?.contentSafeAreaInset;
+  root.setProperty('--shell-safe-top', `${safe?.top ?? 0}px`);
+  root.setProperty('--shell-safe-bottom', `${safe?.bottom ?? 0}px`);
+  root.setProperty('--shell-safe-left', `${safe?.left ?? 0}px`);
+  root.setProperty('--shell-safe-right', `${safe?.right ?? 0}px`);
+  root.setProperty('--shell-content-top', `${content?.top ?? 0}px`);
+  root.setProperty('--shell-content-bottom', `${content?.bottom ?? 0}px`);
+  root.setProperty('--shell-content-left', `${content?.left ?? 0}px`);
+  root.setProperty('--shell-content-right', `${content?.right ?? 0}px`);
+}
+
+let safeAreaBound = false;
+function bindSafeAreaVars(): void {
+  applySafeAreaVars();
+  if (safeAreaBound) return;
+  safeAreaBound = true;
+  const app = webApp();
+  app?.onEvent('safeAreaChanged', applySafeAreaVars);
+  app?.onEvent('contentSafeAreaChanged', applySafeAreaVars);
+  app?.onEvent('fullscreenChanged', applySafeAreaVars);
 }
 
 export function colorScheme(): 'light' | 'dark' {
@@ -100,15 +265,57 @@ export function colorScheme(): 'light' | 'dark' {
 }
 
 /**
+ * Resolve a CSS colour expression (oklch, var(), hex, anything the engine
+ * accepts) to the `#rrggbb` hex string Telegram's colour-setting methods
+ * require. Done by letting the browser itself do the colour-space
+ * conversion: set it as a computed style on a detached element and read
+ * back what the engine normalizes it to.
+ */
+function resolveToHex(value: string): string | null {
+  if (!value) return null;
+  const probe = document.createElement('div');
+  probe.style.color = value;
+  document.body.appendChild(probe);
+  const computed = getComputedStyle(probe).color;
+  document.body.removeChild(probe);
+  const rgb = computed.match(/(\d+(\.\d+)?)/g);
+  if (!rgb || rgb.length < 3) return null;
+  const [r, g, b] = rgb.map((n) => Math.max(0, Math.min(255, Math.round(Number(n)))));
+  const hex = (n: number) => n.toString(16).padStart(2, '0');
+  return `#${hex(r)}${hex(g)}${hex(b)}`;
+}
+
+/**
  * Telegram's themeParams override only the page backdrop, so the app still
  * reads as Aside inside a heavily themed client instead of inheriting a
- * stranger's palette wholesale.
+ * stranger's palette wholesale. On top of that, push the app's OWN resolved
+ * surface colours back to Telegram's header and bottom bar, so its chrome
+ * and the app surface become one continuous field -- see Day 1 plan 5.2.
  */
 export function applyTheme(): 'light' | 'dark' {
   const scheme = colorScheme();
   document.documentElement.dataset.theme = scheme;
-  const bg = webApp()?.themeParams?.bg_color;
+  const app = webApp();
+  const bg = app?.themeParams?.bg_color;
   if (bg) document.documentElement.style.setProperty('--tg-bg', bg);
+
+  // Read AFTER the theme attribute above is applied, so the tokens
+  // resolved are the ones for the scheme we just switched into.
+  const page = resolveToHex(
+    getComputedStyle(document.documentElement).getPropertyValue('--page'),
+  );
+  const surface = resolveToHex(
+    getComputedStyle(document.documentElement).getPropertyValue(
+      '--surface-primary',
+    ),
+  );
+  if (page) {
+    app?.setBackgroundColor?.(page);
+    app?.setHeaderColor?.(page);
+    app?.setBottomBarColor?.(page);
+  } else if (surface) {
+    app?.setHeaderColor?.(surface);
+  }
   return scheme;
 }
 
@@ -163,16 +370,209 @@ export function downloadFile(url: string, fileName: string): void {
   else window.open(url, '_blank', 'noopener,noreferrer');
 }
 
-type Haptic = 'light' | 'medium' | 'soft' | 'success' | 'error' | 'select';
+type Haptic =
+  | 'light'
+  | 'medium'
+  | 'heavy'
+  | 'soft'
+  | 'rigid'
+  | 'success'
+  | 'error'
+  | 'warning'
+  | 'select';
 
 export function haptic(kind: Haptic): void {
   const feedback = webApp()?.HapticFeedback;
   if (!feedback) return;
-  if (kind === 'success' || kind === 'error') {
+  if (kind === 'success' || kind === 'error' || kind === 'warning') {
     feedback.notificationOccurred(kind);
   } else if (kind === 'select') {
     feedback.selectionChanged();
   } else {
     feedback.impactOccurred(kind);
   }
+}
+
+// --- native dialogs ---------------------------------------------------------
+
+/**
+ * A destructive confirmation, native to the client.
+ *
+ * Falls back to `window.confirm` in a plain browser (dev tunnel testing),
+ * so the same call site works in both places.
+ */
+export function showConfirm(message: string): Promise<boolean> {
+  const app = webApp();
+  if (app?.showConfirm) {
+    return new Promise((resolve) => app.showConfirm!(message, resolve));
+  }
+  return Promise.resolve(window.confirm(message));
+}
+
+/** A terminal notice, native to the client. */
+export function showAlert(message: string): Promise<void> {
+  const app = webApp();
+  if (app?.showAlert) {
+    return new Promise((resolve) => app.showAlert!(message, () => resolve()));
+  }
+  window.alert(message);
+  return Promise.resolve();
+}
+
+/** A popup with up to three custom buttons; resolves the id tapped, or null. */
+export function showPopup(params: {
+  title?: string;
+  message: string;
+  buttons: WebAppPopupButton[];
+}): Promise<string | null> {
+  const app = webApp();
+  if (app?.showPopup) {
+    return new Promise((resolve) =>
+      app.showPopup!(params, (id) => resolve(id ?? null)),
+    );
+  }
+  return Promise.resolve(window.confirm(params.message) ? 'ok' : null);
+}
+
+// --- lifecycle: guard against a stray swipe mid-turn ------------------------
+
+export function enableClosingConfirmation(): void {
+  webApp()?.enableClosingConfirmation?.();
+}
+
+export function disableClosingConfirmation(): void {
+  webApp()?.disableClosingConfirmation?.();
+}
+
+// --- native buttons ----------------------------------------------------------
+
+export interface NativeButtonHandle {
+  /** Detach the click handler and hide the button. */
+  release(): void;
+}
+
+/**
+ * Bind Telegram's MainButton or SecondaryButton to one action for as long
+ * as the caller needs it, then release it cleanly. Only one thing should
+ * own a given button at a time -- callers are expected to release before
+ * mounting another binding on the same button.
+ */
+function bindBottomButton(
+  button: WebAppBottomButton | undefined,
+  options: {
+    text: string;
+    onClick: () => void;
+    color?: string;
+    textColor?: string;
+    shine?: boolean;
+  },
+): NativeButtonHandle {
+  if (!button) return { release: () => {} };
+  const handler = options.onClick;
+  button.setParams({
+    text: options.text,
+    is_visible: true,
+    is_active: true,
+    has_shine_effect: options.shine ?? false,
+    ...(options.color ? { color: options.color } : {}),
+    ...(options.textColor ? { text_color: options.textColor } : {}),
+  });
+  button.onClick(handler);
+  return {
+    release() {
+      button.offClick(handler);
+      button.setParams({ is_visible: false });
+    },
+  };
+}
+
+export const mainButton = {
+  bind(options: { text: string; onClick: () => void; shine?: boolean }): NativeButtonHandle {
+    return bindBottomButton(webApp()?.MainButton, options);
+  },
+  showLoader(): void {
+    webApp()?.MainButton?.showProgress(true);
+  },
+  hideLoader(): void {
+    webApp()?.MainButton?.hideProgress();
+  },
+  isSupported(): boolean {
+    return Boolean(webApp()?.MainButton);
+  },
+};
+
+export const secondaryButton = {
+  bind(options: { text: string; onClick: () => void }): NativeButtonHandle {
+    return bindBottomButton(webApp()?.SecondaryButton, options);
+  },
+  isSupported(): boolean {
+    return Boolean(webApp()?.SecondaryButton);
+  },
+};
+
+export const settingsButton = {
+  show(handler: () => void): () => void {
+    const button = webApp()?.SettingsButton;
+    if (!button) return () => {};
+    button.onClick(handler);
+    button.show();
+    return () => {
+      button.offClick(handler);
+      button.hide();
+    };
+  },
+};
+
+// --- cloud storage -----------------------------------------------------------
+
+/**
+ * Small per-account key/value store that survives a reinstall (it is
+ * Telegram's, not the device's). Used for cosmetic continuity only --
+ * last-open session id, per-session draft text, per-session mute -- never
+ * for the bearer token. Falls back to `localStorage` outside Telegram so
+ * dev tunnel testing behaves the same way.
+ *
+ * Limits per Telegram's docs: 1024 keys, 4096 chars per value.
+ */
+export const cloudStorage = {
+  async getItem(key: string): Promise<string | null> {
+    const store = webApp()?.CloudStorage;
+    if (!store) return localStorage.getItem(`miniapp.cloud.${key}`);
+    return new Promise((resolve) => {
+      store.getItem(key, (err, value) => resolve(err ? null : value ?? null));
+    });
+  },
+  async setItem(key: string, value: string): Promise<void> {
+    const store = webApp()?.CloudStorage;
+    if (!store) {
+      localStorage.setItem(`miniapp.cloud.${key}`, value);
+      return;
+    }
+    return new Promise((resolve) => {
+      store.setItem(key, value, () => resolve());
+    });
+  },
+  async removeItem(key: string): Promise<void> {
+    const store = webApp()?.CloudStorage;
+    if (!store) {
+      localStorage.removeItem(`miniapp.cloud.${key}`);
+      return;
+    }
+    return new Promise((resolve) => {
+      store.removeItem(key, () => resolve());
+    });
+  },
+};
+
+// --- device performance -------------------------------------------------------
+
+/**
+ * Parsed from the Android UA suffix Telegram appends:
+ * `Telegram-Android/… (…; Android …; SDK …; {LOW|AVERAGE|HIGH})`.
+ * Absent on iOS/desktop, where it defaults to HIGH -- those platforms do
+ * not ship this signal and are not the ones motion needs to be cut for.
+ */
+export function performanceClass(): 'LOW' | 'AVERAGE' | 'HIGH' {
+  const match = navigator.userAgent.match(/;\s*(LOW|AVERAGE|HIGH)\)/);
+  return (match?.[1] as 'LOW' | 'AVERAGE' | 'HIGH') ?? 'HIGH';
 }

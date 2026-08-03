@@ -30,7 +30,7 @@ import {
   X,
 } from './Icons';
 import { ContextRing } from './ContextRing';
-import { haptic } from '../telegram';
+import { haptic, showConfirm } from '../telegram';
 import type { ComposerAttachment } from '../types';
 import { pillModelLabel } from '../utils/pills';
 
@@ -352,7 +352,11 @@ export function Composer({
             className="round-button stop"
             onClick={() => {
               haptic('medium');
-              onStop();
+              // A real kill: confirm before it happens rather than after,
+              // since there is no undo once the SIGTERM lands.
+              void showConfirm('Stop this turn?').then((ok) => {
+                if (ok) onStop();
+              });
             }}
             disabled={stopping}
             aria-label="Stop"
