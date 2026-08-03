@@ -2534,6 +2534,68 @@
   padding: 0 2px;
 }
 
+/* Routines (8.2): a read-only card, stacked rather than the usual
+   single-line panel row -- there is no control on the right to align
+   against. */
+.routine-row {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  cursor: default;
+}
+
+/* Memory browser (8.1). */
+.memory-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-radius: var(--radius-lg);
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+
+.memory-search input {
+  flex: 1;
+  font-size: var(--text-sm);
+  color: var(--foreground);
+}
+
+.memory-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.memory-tree .memory-tree {
+  padding-left: 14px;
+}
+
+.memory-tree-dir,
+.memory-tree-file {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 8px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  color: var(--secondary-foreground);
+}
+
+.memory-tree-file {
+  color: var(--brand);
+}
+
+.memory-tree-dir:active,
+.memory-tree-file:active {
+  background: var(--muted);
+}
+
+.memory-page {
+  padding: 4px 2px;
+}
+
 /* ====================================================================
  * Home: resting state over hidden history
  *

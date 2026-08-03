@@ -19,6 +19,8 @@
  */
 import { useEffect, useState } from 'react';
 import { AsideSymbol, Check, ChevronLeft, ProviderMark, Spinner } from './Icons';
+import { MemoryBrowser } from './MemoryBrowser';
+import { RoutinesList } from './RoutinesList';
 import { api } from '../api';
 import { haptic } from '../telegram';
 import type { MiniappSettings, StatusResponse } from '../types';
@@ -161,6 +163,15 @@ export function SettingsScreen({
 }) {
   const [settings, setSettings] = useState<MiniappSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Memory and Routines are destinations reached FROM Settings, not new
+   * top-level screens -- App.tsx does not need to know about either. Each
+   * swaps this screen's own rendered content, exactly like Settings itself
+   * swaps App.tsx's, and each one's own back button returns here.
+   */
+  const [subScreen, setSubScreen] = useState<'none' | 'memory' | 'routines'>(
+    'none',
+  );
 
   useEffect(() => {
     let alive = true;
@@ -221,6 +232,13 @@ export function SettingsScreen({
   ];
 
   const service = status?.service;
+
+  if (subScreen === 'memory') {
+    return <MemoryBrowser onClose={() => setSubScreen('none')} />;
+  }
+  if (subScreen === 'routines') {
+    return <RoutinesList onClose={() => setSubScreen('none')} />;
+  }
 
   return (
     <div className="app settings-screen">
@@ -333,6 +351,39 @@ export function SettingsScreen({
                   </span>
                 }
               />
+            </Section>
+
+            <Section title="Aside on your phone">
+              <button
+                type="button"
+                className="settings-row is-button"
+                onClick={() => {
+                  haptic('light');
+                  setSubScreen('memory');
+                }}
+              >
+                <span className="settings-row-text">
+                  <span className="settings-row-title">Memory</span>
+                  <span className="settings-row-description">
+                    Browse the account memory pages Aside itself keeps.
+                  </span>
+                </span>
+              </button>
+              <button
+                type="button"
+                className="settings-row is-button"
+                onClick={() => {
+                  haptic('light');
+                  setSubScreen('routines');
+                }}
+              >
+                <span className="settings-row-text">
+                  <span className="settings-row-title">Routines</span>
+                  <span className="settings-row-description">
+                    See scheduled routines. Read-only from here.
+                  </span>
+                </span>
+              </button>
             </Section>
 
             <Section title="Appearance">
