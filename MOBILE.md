@@ -171,6 +171,61 @@ passes what avoids it:
 
 Leave those alone.
 
+### About the scary install warnings
+
+Android will warn you, more than once, and the warnings are worth reading
+rather than clicking past. Here is what each one actually means.
+
+**"Your browser is not allowed to install unknown apps."** Android only
+trusts the Play Store by default. You are installing an APK you built
+yourself from a link on your own machine, so it asks you to grant that one
+app permission to install. This is the same prompt F-Droid and every beta
+build trigger. Grant it to whichever app opened the link, and revoke it
+afterwards if you like.
+
+**"This type of file can harm your device."** Chrome says this about every
+`.apk`, always, regardless of what is in it. It is a blanket message about
+the file extension.
+
+**"App scanned, no problems detected"** or **"Send app for scanning?"** This
+is Play Protect. Let it scan. It is checking the app against Google's
+malware set and it will pass, because there is nothing in it to find.
+
+**"Unsafe app blocked" or an install that just fails.** Play Protect
+sometimes blocks sideloaded apps it has never seen before, which is a
+statement about popularity rather than about content. Choose "Install
+anyway" if you are offered it. If not, Settings, Google, Play Protect, then
+turn off scanning long enough to install and turn it back on afterwards.
+
+**Why it is unsigned.** Publishing an app that installs without any warning
+means paying Google $25 for a Play Console account and going through review,
+or distributing a release build signed with a certificate you have to manage
+and trust anyway. For an app that only talks to your own Mac over your own
+private network, that ceremony buys nothing. So this is a debug build, and
+Android is right to tell you it came from outside the store.
+
+**How to check you got what you think you got.** The APK never leaves your
+tailnet, so the realistic risk is not interception. If you want certainty
+anyway, compare the checksum of what your phone downloaded against what your
+Mac built:
+
+```bash
+shasum -a 256 ~/.aside-telegram-bridge/miniapp/web/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+**What the app can actually do.** It asks for microphone (voice input),
+notifications (push when a task finishes), and internet. It has no contacts,
+location, camera, SMS or storage access. The code is in this repo; the
+permissions are declared in
+`miniapp/web/android/app/src/main/AndroidManifest.xml` and you can read the
+whole list in a minute.
+
+**If you would rather have no warnings at all**, use the iPhone instructions
+below on an iPhone, or just open `https://<your-tailnet-host>/app` in Chrome
+on Android and add it to your home screen. That gets you the same app as a
+web app with no APK involved. You lose the in-app GeckoView search and keep
+everything else.
+
 ### Why 99MB
 
 Search runs inside the app, and staying signed into Google is what costs the
