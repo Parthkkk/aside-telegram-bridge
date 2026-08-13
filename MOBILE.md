@@ -324,6 +324,60 @@ cd miniapp/server && npx vitest run   # 525 tests
 - No Anthropic credentials live here. It talks to the Aside daemon already
   running on the Mac.
 
+### Please check this yourself
+
+You are about to give something access to your agent, your browser history
+and your microphone, on a machine you care about. Reading it first is the
+right instinct, and you are very welcome to. Nothing here is obfuscated,
+minified or fetched from somewhere you cannot see.
+
+A good half hour, roughly in order of value:
+
+- **`miniapp/server/src/auth.ts`** and **`app.ts`** are where tokens are
+  minted and every route is guarded. If something is wrong with the trust
+  model, it is wrong here.
+- **`miniapp/web/android/app/src/main/AndroidManifest.xml`** is the complete
+  list of what the Android app can touch. It is short on purpose.
+- **`build-android.sh`** is every command that runs during a build, in
+  order, with nothing hidden behind a wrapper.
+- **`package.json`** in `server/` and `web/`, then `npm audit`, for the
+  dependency surface.
+
+Useful things to run:
+
+```bash
+# Known CVEs in the dependency tree
+cd miniapp/server && npm audit
+cd ../web && npm audit
+
+# Every outbound host the code talks to
+grep -rInE "https?://[a-z0-9.-]+" miniapp/*/src --include=*.ts --include=*.tsx \
+  | grep -v localhost | sort -u
+
+# Confirm nothing is listening beyond loopback once it is running
+lsof -nP -iTCP -sTCP:LISTEN | grep 8790
+```
+
+That last one is the claim most worth testing rather than taking on trust:
+the server should bind `127.0.0.1` only, with Tailscale as the sole route in
+from anywhere else.
+
+**Found something?** Open an issue, or send a pull request. A security
+report is a favour, and it will be treated as one. If you would rather not
+discuss it in public first, say so in the issue without the details and we
+will find another way.
+
+**Do not trust a link, including this one.** If you did not clone this
+yourself from a URL you typed, verify the remote before you run anything:
+
+```bash
+git remote -v          # expect github.com/Parthkkk/aside-telegram-bridge
+git log --oneline -5   # read what you are about to run
+```
+
+Forking it and building from your own copy is a completely reasonable way to
+use this, and it costs you nothing.
+
 ---
 
 ## When it breaks
