@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { buildServer } from './app.js';
 import { loadConfig, loadOrCreateJwtSecret } from './config.js';
 import { MenuSync, Tunnel, defaultBinDir } from './tunnel.js';
+import { primeTailnetHost, tailnetHost } from './tailnet.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -20,14 +21,25 @@ async function main(): Promise<void> {
   // hostname: a quick tunnel rotates it while we run, so anything captured
   // at boot goes stale.
   let tunnel: Tunnel | null = null;
+  /*
+   * External mode has no Tunnel object to ask, because the hostname is
+   * owned by another daemon (Tailscale Funnel) and is fixed for good.
+   * Captured once at boot is correct here precisely because it cannot
+   * rotate -- the opposite of the quick-tunnel case above.
+   */
+  let externalUrl: string | null = null;
 
   const { app } = await buildServer(config, {
     webDist,
     jwtSecret,
     logger: process.env.MINIAPP_LOG !== '0',
-    publicUrl: () => tunnel?.url ?? null,
+    publicUrl: () => tunnel?.url ?? externalUrl,
     version: process.env.MINIAPP_VERSION || '0.1.0',
+    tailnetHost,
   });
+
+  // Warmed at boot so the first hit on /pair does not wait on a subprocess.
+  primeTailnetHost();
 
   const host = process.env.MINIAPP_HOST || '127.0.0.1';
   await app.listen({ port: config.port, host });
@@ -40,7 +52,9 @@ async function main(): Promise<void> {
 
   let menu: MenuSync | null = null;
 
-  if (config.miniapp.tunnel === 'cloudflared') {
+  const tunnelMode = config.miniapp.tunnel;
+
+  if (tunnelMode === 'cloudflared' || tunnelMode === 'external') {
     if (config.miniapp.autoRegisterMenu) {
       // Owns retries and drift repair. A single fire-and-forget call used
       // to live inline here, and losing that one call (network not up yet
@@ -56,16 +70,40 @@ async function main(): Promise<void> {
         'menu auto-registration is off; set miniapp.auto_register_menu to enable',
       );
     }
+  }
 
+  if (tunnelMode === 'external') {
+    externalUrl = `https://${config.miniapp.tunnelHostname}`;
+    app.log.info(
+      `external tunnel: public url is ${externalUrl} (managed outside this process)`,
+    );
+    /*
+     * No watchdog and no recycle loop: there is nothing here to restart.
+     * If the machine sleeps, the external daemon reattaches on wake at the
+     * SAME hostname, so an already-open webview keeps working. One
+     * reconcile at boot is enough to repair a menu button left pointing at
+     * an old cloudflared hostname from a previous run.
+     */
+    menu?.setTarget(externalUrl);
+    void menu?.reconcile();
+  }
+
+  if (tunnelMode === 'cloudflared') {
     tunnel = new Tunnel({
       port: config.port,
       binDir: defaultBinDir(config.miniapp.stateDir),
       cloudflaredPath: config.miniapp.cloudflaredPath || undefined,
+      tunnelName: config.miniapp.tunnelName || undefined,
+      configPath: config.miniapp.cloudflaredConfig || undefined,
+      fixedUrl: config.miniapp.tunnelHostname
+        ? `https://${config.miniapp.tunnelHostname}`
+        : undefined,
       log: (message) => app.log.info(message),
       onUrl: (url) => {
         app.log.info(`public url: ${url}`);
-        // Re-runs on every hostname rotation, which is what keeps an
-        // ephemeral quick-tunnel usable as a menu button target.
+        // Fires once per spawn for a named tunnel (fixed hostname) and on
+        // every rotation for a quick tunnel; either way it keeps the
+        // ephemeral-quick-tunnel case pointed at the live hostname.
         menu?.setTarget(url);
       },
       onHealthy: (url) => {

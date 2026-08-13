@@ -30,6 +30,22 @@ import type { CitationMark } from '../utils/citations';
 
 const OUTPUT_CLAMP = 600;
 
+/**
+ * Which folds the reader has opened or closed by hand, by block id.
+ *
+ * This lives outside the component on purpose. The thread is a virtualised
+ * list, so a row that scrolls out of view -- or simply gets recycled when
+ * a delta changes the list -- is unmounted and remounted with fresh state.
+ * With the preference held in `useState` that meant a fold the reader had
+ * opened silently snapped shut again a moment later, which is exactly the
+ * "it collapses sometimes" behaviour. Block ids are stable across deltas,
+ * so keying on them survives both recycling and a full re-render.
+ *
+ * A plain Map rather than storage: this is a within-session preference,
+ * and a fold state restored days later would be stale and confusing.
+ */
+const FOLD_PINS = new Map<string, boolean>();
+
 export interface WorkFoldProps {
   block: WorkBlock;
   /** Whose thread this is -- local image paths resolve against it. */
@@ -225,10 +241,36 @@ function Timeline({
 
 export function WorkFold(props: WorkFoldProps) {
   const { block, live } = props;
-  // Null means "follow the turn": open while it works, folded once the
-  // answer starts. An explicit tap pins it either way.
-  const [pinned, setPinned] = useState<boolean | null>(null);
-  const open = pinned ?? live;
+  /*
+   * Null means "follow the turn". An explicit tap pins it either way, and
+   * the pin is held outside this component so a virtualised remount cannot
+   * discard it.
+   */
+  const [, bump] = useState(0);
+  const pinned = FOLD_PINS.has(block.id)
+    ? (FOLD_PINS.get(block.id) as boolean)
+    : null;
+  const setPinned = (next: boolean) => {
+    FOLD_PINS.set(block.id, next);
+    bump((n) => n + 1);
+  };
+
+  /*
+   * Open for the whole time the turn is running, not just until the answer
+   * begins.
+   *
+   * The old rule folded the timeline the moment an answer started, which
+   * matches the desktop app at the END of a turn but is wrong in the middle
+   * of a long one: a turn that writes some commentary, folds, then keeps
+   * working for another eight minutes leaves the reader staring at
+   * `Worked for 9m 25s` with no way to see what is happening without
+   * tapping in every single time. On a phone, where the thread is the only
+   * window into the Mac, watching the work IS the feature.
+   *
+   * So a running block stays open, and folding is what happens when the
+   * turn is genuinely over.
+   */
+  const open = pinned ?? (live || block.running);
 
   const lastStep = [...block.items]
     .reverse()

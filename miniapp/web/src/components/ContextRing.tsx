@@ -11,8 +11,11 @@ import { haptic } from '../telegram';
  * progress meter here, and its tooltip says so. Busy-ness now lives in the
  * streaming footer, and this never animates.
  *
- * A session with no assistant message yet has no usage to report, so the
- * ring renders empty rather than claiming 0% of a window it has not touched.
+ * A session with no assistant message yet has no usage to report, and so
+ * this renders NOTHING rather than an empty circle. The empty state was
+ * indistinguishable from a stalled spinner -- a grey ring sitting in the
+ * control row next to a real one, reporting nothing and looking broken.
+ * A meter with no reading is not a neutral default, it is noise.
  */
 export function ContextRing({
   used,
@@ -30,6 +33,10 @@ export function ContextRing({
   const percent = Math.round(fraction * 100);
   const radius = 6.25;
   const circumference = 2 * Math.PI * radius;
+
+  // Nothing measured yet: show nothing. The ring appears on the first turn
+  // that actually consumes context.
+  if (!(contextWindow > 0) || used <= 0) return null;
 
   return (
     <>
@@ -53,20 +60,18 @@ export function ContextRing({
             strokeWidth="1.6"
             opacity="0.25"
           />
-          {fraction > 0 ? (
-            <circle
-              cx="8"
-              cy="8"
-              r={radius}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              strokeDasharray={`${circumference * fraction} ${circumference}`}
-              // Start the arc at twelve o'clock, like Aside's.
-              transform="rotate(-90 8 8)"
-            />
-          ) : null}
+          <circle
+            cx="8"
+            cy="8"
+            r={radius}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeDasharray={`${circumference * fraction} ${circumference}`}
+            // Start the arc at twelve o'clock, like Aside's.
+            transform="rotate(-90 8 8)"
+          />
         </svg>
       </button>
 

@@ -127,9 +127,12 @@ export function ModelSheet({
     return out;
   }, [catalog, query]);
 
+  // Picking a model or an effort level no longer closes the sheet. Parth
+  // wants to set both in one visit (model, then reasoning) without
+  // reopening it, so the sheet now only closes on an explicit dismissal:
+  // backdrop tap, the X button, or Escape.
   const choose = (provider: string, modelId: string) => {
     onPickModel(provider, modelId);
-    onClose();
   };
 
   const effortLabel =

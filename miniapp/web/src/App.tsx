@@ -17,17 +17,24 @@ import { CitationSheet } from './components/Citations';
 import { SessionPanel } from './components/SessionPanel';
 import { SettingsScreen } from './components/SettingsScreen';
 import { RestCue, RestHero } from './components/Rest';
+import { SearchPanel } from './components/SearchPanel';
+import { useSidePager } from './hooks/useSidePager';
 import { StreamFooter, estimateTokens } from './components/StreamFooter';
 import { TodoSection } from './components/TodoSection';
 import { ErrorCard } from './components/ErrorCard';
-import { ChevronLeft, Globe, PanelRight, Settings, Spinner } from './components/Icons';
+import { ChevronLeft, Globe, PanelRight, Search, Spinner } from './components/Icons';
 import { TabDeck } from './components/TabDeck';
 import { WatchModeCard } from './components/WatchMode';
 import type { CitationMark } from './utils/citations';
 import { api, setAuthToken } from './api';
+import { resolveStandaloneAuth } from './standalone';
+import { PairPrompt } from './components/PairPrompt';
+import { InstallHint } from './components/InstallHint';
 import { useThread } from './hooks/useThread';
 import { useAttachments } from './hooks/useAttachments';
+import { useDockHeight } from './hooks/useDockHeight';
 import { resolvePills } from './utils/pills';
+import { readLocal, writeLocal } from './utils/storage';
 import {
   applyTheme,
   authenticateIfEnabled,
@@ -114,6 +121,14 @@ export default function App() {
   const [sending, setSending] = useState(false);
   /** The Settings screen, opened from the model picker's Settings row. */
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /**
+   * The tab deck, opened from the home topbar.
+   *
+   * Separate state from `ThreadScreen`'s own copy on purpose: the two
+   * screens never coexist, and threading one flag down through props would
+   * couple them for no benefit.
+   */
+  const [homeTabsOpen, setHomeTabsOpen] = useState(false);
 
   /** Sessions waiting on the user, surfaced as a badge near the topbar. */
   const waitingCount = sessions.filter((s) => s.waiting).length;
@@ -130,6 +145,17 @@ export default function App() {
    */
   const homeScroll = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
+  /*
+   * The home screen's second page. Declared up here with the other hooks
+   * because the screens below return early, and a hook behind a branch is
+   * a hook that changes order between renders.
+   */
+  const pager = useSidePager((next) => haptic(next === 1 ? 'light' : 'soft'));
+  // The two elements the dock-height measurement needs: the shell it
+  // writes the variable onto, and the dock it measures.
+  const homeShell = useRef<HTMLDivElement>(null);
+  const homeDock = useRef<HTMLElement>(null);
+  useDockHeight(homeShell, homeDock);
 
   const scrollToHistory = useCallback(() => {
     haptic('light');
@@ -139,13 +165,13 @@ export default function App() {
   // A chosen model/effort sticks across launches; until one is chosen the
   // pills mirror whatever the daemon's own default is.
   const [provider, setProvider] = useState(
-    () => localStorage.getItem(PROVIDER_KEY) || '',
+    () => readLocal(PROVIDER_KEY) || '',
   );
   const [modelId, setModelId] = useState(
-    () => localStorage.getItem(MODEL_KEY) || '',
+    () => readLocal(MODEL_KEY) || '',
   );
   const [effort, setEffort] = useState(
-    () => localStorage.getItem(EFFORT_KEY) || '',
+    () => readLocal(EFFORT_KEY) || '',
   );
 
   /**
@@ -198,17 +224,35 @@ export default function App() {
     stashDevInitData(location.hash);
 
     const raw = readInitData();
-    if (!raw) {
-      setAuth({ phase: 'failed', reason: 'Open this from Telegram.' });
+    if (raw) {
+      api.auth(raw).then(
+        (res) => {
+          setAuthToken(res.token);
+          void runBiometricGate(res.user.firstName);
+        },
+        (err) => setAuth({ phase: 'failed', reason: (err as Error).message }),
+      );
       return off;
     }
-    api.auth(raw).then(
-      (res) => {
-        setAuthToken(res.token);
-        void runBiometricGate(res.user.firstName);
-      },
-      (err) => setAuth({ phase: 'failed', reason: (err as Error).message }),
-    );
+
+    // No initData: this is the installed app, opened from the home screen
+    // rather than launched by Telegram. Same JWT spine, different front door.
+    resolveStandaloneAuth().then((result) => {
+      if (result.ok) {
+        setAuthToken(result.token);
+        void runBiometricGate(result.name);
+        return;
+      }
+      setAuth({
+        phase: 'failed',
+        reason:
+          result.reason === 'pair_rejected'
+            ? 'That pairing link is no longer valid. Generate a new one on your Mac and paste it below.'
+            : result.reason === 'unreachable'
+              ? "Can't reach your Mac. Make sure it's awake and Amphetamine is on."
+              : 'Not paired yet. Paste the pairing link from your Mac below.',
+      });
+    });
     return off;
   }, [runBiometricGate]);
 
@@ -232,6 +276,29 @@ export default function App() {
       setLoadingSessions(false);
     }
   }, []);
+
+  /**
+   * Delete a chat from history.
+   *
+   * Optimistic: the row goes the instant the request is sent, because a
+   * spinner on a row the user has already decided about is just latency
+   * they have to watch. `loadSessions()` reconciles either way -- on
+   * success it confirms, on failure it puts the row back -- so the list
+   * ends up agreeing with the server rather than with this handler.
+   */
+  const deleteSession = useCallback(
+    async (id: string) => {
+      setSessions((prev) => prev.filter((session) => session.id !== id));
+      try {
+        await api.deleteSession(id);
+      } catch {
+        // Nothing to say here; the reload below is the authority on what
+        // actually still exists.
+      }
+      void loadSessions();
+    },
+    [loadSessions],
+  );
 
   useEffect(() => {
     if (auth.phase !== 'ready') return;
@@ -320,14 +387,14 @@ export default function App() {
   const pickModel = (nextProvider: string, nextModel: string) => {
     setProvider(nextProvider);
     setModelId(nextModel);
-    localStorage.setItem(PROVIDER_KEY, nextProvider);
-    localStorage.setItem(MODEL_KEY, nextModel);
+    writeLocal(PROVIDER_KEY, nextProvider);
+    writeLocal(MODEL_KEY, nextModel);
     haptic('select');
   };
 
   const pickEffort = (next: string) => {
     setEffort(next);
-    localStorage.setItem(EFFORT_KEY, next);
+    writeLocal(EFFORT_KEY, next);
     haptic('select');
   };
 
@@ -390,6 +457,18 @@ export default function App() {
       <div className="boot">
         <p className="boot-title">Can’t sign in</p>
         <p className="boot-reason">{auth.reason}</p>
+        {/*
+          Offered on every failure, not only the unpaired one. A rejected
+          key and an unreachable Mac both leave the owner holding a link
+          that might work, and the alternative on a phone is no way
+          forward at all.
+        */}
+        <PairPrompt
+          onPaired={(token, name) => {
+            setAuthToken(token);
+            void runBiometricGate(name);
+          }}
+        />
       </div>
     );
   }
@@ -470,7 +549,17 @@ export default function App() {
 
   if (!screen) {
     return (
-      <div className="app app-home">
+      <div
+        className={`app app-home${pager.page === 1 ? ' side-open' : ''}${pager.dragging ? ' side-dragging' : ''}`}
+        ref={homeShell}
+        {...pager.handlers}
+      >
+        {/*
+          Home screen only. It refers to Safari's Share button, so it
+          belongs on the screen the app opens to rather than inside a
+          conversation the owner has deliberately navigated into.
+        */}
+        <InstallHint />
         {/*
           One scroller holding two full panels. The composer is NOT in it:
           it is docked below, so the software keyboard cannot push it out
@@ -480,10 +569,18 @@ export default function App() {
         <main className="home-scroll" ref={homeScroll}>
           <section className="home-rest">
             {/*
-              Settings had no route in from this screen at all -- it lived
-              behind a row inside the model picker, which is not somewhere
-              anyone looks for it. One icon, and the otherwise empty top of
-              the resting panel now has a reason to exist.
+              Browser, not Settings.
+              
+              Settings used to live here AND as a row at the bottom of the
+              model sheet, which is two routes to a screen visited about
+              once a month -- the model sheet keeps it, since that is where
+              you already are when you want it.
+
+              The tab deck earns the slot instead. It was reachable only
+              from a globe icon inside a thread header, which means it was
+              invisible unless you had already opened a conversation, and
+              seeing what is open on the Mac is a reason to pick the phone
+              up rather than something you go looking for mid-thread.
             */}
             <div className="home-topbar">
               {waitingCount > 0 ? (
@@ -494,11 +591,22 @@ export default function App() {
                 className="icon-button"
                 onClick={() => {
                   haptic('light');
-                  setSettingsOpen(true);
+                  pager.open();
                 }}
-                aria-label="Settings"
+                aria-label="Search the web"
               >
-                <Settings size={19} strokeWidth={1.75} />
+                <Search size={19} strokeWidth={1.75} />
+              </button>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => {
+                  haptic('light');
+                  setHomeTabsOpen(true);
+                }}
+                aria-label="Browser tabs"
+              >
+                <Globe size={19} strokeWidth={1.75} />
               </button>
             </div>
             <RestHero name={auth.phase === 'ready' ? auth.name : undefined} />
@@ -510,11 +618,12 @@ export default function App() {
               sessions={sessions}
               onOpen={(id) => openThread({ id })}
               loading={loadingSessions}
+              onDelete={deleteSession}
             />
           </section>
         </main>
 
-        <footer className="home-dock">
+        <footer className="home-dock" ref={homeDock}>
           <Composer
             variant="home"
             value={draft}
@@ -546,6 +655,27 @@ export default function App() {
             haptic('light');
           },
         })}
+        {/*
+          The side page rides above the home screen rather than sharing a
+          transformed track with it. A transform on a common ancestor would
+          become the containing block for the docked composer and the
+          sheets, which is a lot of layout risk for a panel that only ever
+          needs to slide in from one edge.
+        */}
+        <div
+          className="side-page"
+          style={
+            pager.dragging
+              ? { transform: `translate3d(calc(100% + ${pager.offset}px), 0, 0)` }
+              : undefined
+          }
+          aria-hidden={pager.page === 0}
+        >
+          <SearchPanel active={pager.page === 1} onClose={pager.close} />
+        </div>
+        {homeTabsOpen ? (
+          <TabDeck onClose={() => setHomeTabsOpen(false)} />
+        ) : null}
       </div>
     );
   }
@@ -630,10 +760,14 @@ function ThreadScreen({
 }) {
   const thread = useThread(sessionId);
   const scroller = useRef<HTMLDivElement>(null);
+  const threadShell = useRef<HTMLDivElement>(null);
+  const threadDock = useRef<HTMLElement>(null);
+  useDockHeight(threadShell, threadDock);
   const [sending, setSending] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [tabDeckOpen, setTabDeckOpen] = useState(false);
   const [citation, setCitation] = useState<CitationMark | null>(null);
+  const [recovering, setRecovering] = useState(false);
 
   // A stray swipe-to-close should not be able to drop a running turn.
   // Cleared unconditionally on unmount so leaving the thread never leaves
@@ -771,6 +905,29 @@ function ThreadScreen({
     onOpenRecovered(res.sessionId);
   };
 
+  /**
+   * The composer's own way out.
+   *
+   * `QuestionCard`'s "Continue in a new session" button only exists when
+   * the transcript parsed a proper native-question item. A session can be
+   * suspended in the daemon's own status column without one -- the driver
+   * gets reaped mid tool-call and the write that would have produced a
+   * clean question item never lands -- and that left the blocked banner
+   * telling the user to tap a button that was not anywhere on screen. This
+   * is that button, always present whenever the composer is blocked.
+   */
+  const recoverFromComposer = async () => {
+    if (recovering) return;
+    setRecovering(true);
+    try {
+      await recover('');
+    } catch {
+      thread.refresh();
+    } finally {
+      setRecovering(false);
+    }
+  };
+
   const setPermission = async (patch: {
     mode?: string;
     finalConfirm?: boolean;
@@ -797,7 +954,7 @@ function ThreadScreen({
   };
 
   return (
-    <div className="app">
+    <div className="app" ref={threadShell}>
       <header className="thread-header">
         <button type="button" className="icon-button" onClick={onBack} aria-label="Back">
           <ChevronLeft size={20} strokeWidth={1.75} />
@@ -878,7 +1035,7 @@ function ThreadScreen({
         ))}
       </div>
 
-      <footer className="thread-footer">
+      <footer className="thread-footer" ref={threadDock}>
         <Composer
           variant="reply"
           value={draft}
@@ -904,9 +1061,24 @@ function ThreadScreen({
           // forever, so the composer refuses rather than jamming.
           blockedReason={
             thread.suspended
-              ? 'Waiting on a question that can only be answered from Aside on your computer. Use “Continue in a new session” on the question above to carry on from here.'
+              ? thread.hasRecoverableQuestion
+                ? 'Waiting on a question that can only be answered from Aside on your computer.'
+                : 'This session got stuck waiting on Aside on your computer and can\u2019t pick back up. Start a new chat to keep going.'
               : null
           }
+          onRecover={
+            thread.suspended
+              ? thread.hasRecoverableQuestion
+                ? recoverFromComposer
+                : onBack
+              : undefined
+          }
+          recoverLabel={
+            thread.hasRecoverableQuestion
+              ? 'Continue in a new session'
+              : 'Back to chats'
+          }
+          recovering={recovering}
           above={<TodoSection todos={thread.todos} />}
         />
       </footer>

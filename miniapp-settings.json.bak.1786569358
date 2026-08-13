@@ -1,0 +1,7 @@
+{
+  "defaultProvider": "OCX",
+  "defaultModelId": "opencode-free/deepseek-v4-flash-free",
+  "defaultEffort": "",
+  "defaultPermissionMode": null,
+  "defaultFinalConfirm": true
+}

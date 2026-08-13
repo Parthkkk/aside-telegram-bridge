@@ -102,6 +102,10 @@ export async function openNewTab(
   })()`;
 
   const result = await cache.mutate(script);
+  // The tab list is cached for 2s. Without dropping it here, the very next
+  // poll re-serves a snapshot taken BEFORE this tab existed, so a tab the
+  // user just opened appears to not have opened for up to two seconds.
+  cache.invalidate('browser:tabs');
   const record = (result || {}) as { targetId?: string | null; url?: string };
   return { targetId: record.targetId ?? null, url: record.url || parsed.toString() };
 }
@@ -120,6 +124,10 @@ export async function closeTab(
     return { closed: true };
   })()`;
   const result = await cache.mutate(script);
+  // Same reason as `openNewTab`, and worse here: the stale read would
+  // RESURRECT a tab the user watched disappear, which reads as the close
+  // having failed.
+  cache.invalidate('browser:tabs');
   return Boolean((result as { closed?: boolean } | null)?.closed);
 }
 

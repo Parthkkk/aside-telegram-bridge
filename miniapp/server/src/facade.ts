@@ -168,6 +168,19 @@ export class FacadeCache {
   invalidate(key: string): void {
     this.entries.delete(key);
   }
+
+  /**
+   * Drop every key under a prefix.
+   *
+   * The session list is cached per requested limit (`sessions:100`), so a
+   * mutation that changes WHICH sessions exist cannot name the one key it
+   * invalidated -- it has to clear the family.
+   */
+  invalidatePrefix(prefix: string): void {
+    for (const key of [...this.entries.keys()]) {
+      if (key.startsWith(prefix)) this.entries.delete(key);
+    }
+  }
 }
 
 /** A session as the daemon knows it -- the shape `aside.sessions.list()` returns. */
@@ -267,6 +280,35 @@ export function fetchRoutines(cache: FacadeCache): Promise<unknown[]> {
   return cache
     .call<unknown[] | null>('routines:list', 'aside.routines.list()', 10_000)
     .then((rows) => (Array.isArray(rows) ? rows : []));
+}
+
+/**
+ * Remove a chat from the phone's history.
+ *
+ * `archive`, not a hard delete, and that is a deliberate choice rather than
+ * a shortcut. The daemon exposes no destructive session verb at all: the
+ * documented facade is `archive`/`unarchive`, and `sessions.list()` already
+ * defaults to non-archived, so archiving is EXACTLY "gone from the list"
+ * from the phone's point of view while staying recoverable on the desktop.
+ *
+ * The alternative -- deleting rows out of the daemon's private sqlite and
+ * unlinking transcript files -- would orphan artifacts, race the running
+ * daemon's own writes, and break on the next Aside release. A swipe on a
+ * phone is not a good reason to reach into another process's database.
+ *
+ * Unlike `markSessionRead` this THROWS on failure. A read that silently
+ * misses is a stale dot; a delete that silently misses is a row the user
+ * watched disappear and then watched come back.
+ */
+export async function archiveSession(
+  cache: FacadeCache,
+  id: string,
+): Promise<void> {
+  await cache.mutate(`aside.sessions.archive(${lit(id)})`);
+  cache.invalidate(`session:${id}`);
+  // The list is cached under a per-limit key, so drop every one of them --
+  // otherwise the row reappears on the next poll until the TTL lapses.
+  cache.invalidatePrefix('sessions:');
 }
 
 export async function markSessionRead(

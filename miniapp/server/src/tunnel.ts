@@ -2,14 +2,17 @@
  * Public HTTPS exposure, with no extra tooling for the end user.
  *
  * A Telegram Mini App must be served over HTTPS from a public URL, but the
- * server runs on someone's Mac. Rather than making people set up Tailscale
- * or a Cloudflare account, this downloads the static `cloudflared` binary
- * once and runs a quick tunnel, which needs no account at all.
+ * server runs on someone's Mac. The default path downloads the static
+ * `cloudflared` binary once and runs a quick tunnel, which needs no
+ * Cloudflare account at all.
  *
- * The tradeoff, deliberately taken: a quick tunnel's hostname is ephemeral
- * and changes on every restart. That is why `onUrl` exists and why menu
- * registration is wired to it -- when the hostname rotates, the menu
- * button is pointed at the new one.
+ * A quick tunnel's hostname is ephemeral and changes on every restart.
+ * That is why `onUrl` exists and why menu registration is wired to it:
+ * when the hostname rotates, the menu button is pointed at the new one.
+ * The alternative is a named tunnel (a Cloudflare account, a domain, and
+ * a one-time `cloudflared tunnel login`): pass `fixedUrl` plus `tunnelName`
+ * and `configPath`, and the hostname is set from config instead of parsed
+ * from output, so it never rotates and Telegram never needs repointing.
  *
  * The binary lives under the bridge's state directory, never in the repo.
  */
@@ -176,6 +179,16 @@ export interface TunnelOptions {
   binDir: string;
   /** A cloudflared the user installed themselves; skips the download. */
   cloudflaredPath?: string;
+  /**
+   * Fixed public URL of a named tunnel, e.g. `https://miniapp.example.com`.
+   * When set, the hostname is never parsed from cloudflared output and
+   * cannot rotate; `tunnelName` and `configPath` must be set as well.
+   */
+  fixedUrl?: string;
+  /** Named tunnel: `cloudflared tunnel run <tunnelName>`. */
+  tunnelName?: string;
+  /** Named tunnel: path to the YAML config (ingress rules + credentials). */
+  configPath?: string;
   onUrl?: (url: string) => void;
   log?: (message: string) => void;
   /** Injected in tests so no network or process is ever touched. */
@@ -363,11 +376,12 @@ export async function ensureCloudflared(
 }
 
 /**
- * A supervised quick tunnel.
+ * A supervised cloudflared tunnel, named or quick.
  *
  * Restarts with backoff if cloudflared exits -- which it does on network
  * loss and on sleep/wake -- and reports every hostname change through
- * `onUrl`.
+ * `onUrl`. A named tunnel reports its fixed hostname once per spawn; a
+ * quick tunnel reports each rotation as it is parsed from the output.
  */
 export class Tunnel {
   private child: ChildProcess | null = null;
@@ -387,6 +401,8 @@ export class Tunnel {
   }
 
   private handleChunk(chunk: string): void {
+    // A named tunnel's hostname comes from config, never from output.
+    if (this.opts.fixedUrl) return;
     const found = parseTunnelUrl(chunk);
     if (!found || found === this.url) return;
     this.url = found;
@@ -500,6 +516,21 @@ export class Tunnel {
   }
 
   async start(): Promise<void> {
+    // Named-tunnel options must arrive as a complete set; a partial one is
+    // a config mistake that would silently fall back to a rotating
+    // hostname, which is the failure mode this feature exists to remove.
+    const namedParts = [
+      this.opts.fixedUrl,
+      this.opts.tunnelName,
+      this.opts.configPath,
+    ].filter(Boolean).length;
+    if (namedParts !== 0 && namedParts !== 3) {
+      throw new Error(
+        'named tunnel needs all of tunnel_hostname, tunnel_name and ' +
+          'cloudflared_config in the miniapp config (or their MINIAPP_* ' +
+          `env vars); got ${namedParts} of 3`,
+      );
+    }
     this.stopped = false;
     this.startMonitor();
     const supplied = userSuppliedCloudflared(this.opts.cloudflaredPath);
@@ -519,25 +550,52 @@ export class Tunnel {
   private spawnOnce(bin: string): void {
     if (this.stopped) return;
     const spawnFn = this.opts.spawnFn || spawn;
-    this.log(`starting tunnel -> http://127.0.0.1:${this.opts.port}`);
+    const named = Boolean(this.opts.fixedUrl);
+    this.log(
+      named
+        ? `starting tunnel ${this.opts.tunnelName} -> ${this.opts.fixedUrl}`
+        : `starting tunnel -> http://127.0.0.1:${this.opts.port}`,
+    );
 
+    // QUIC (UDP 7844) is blocked on some networks (e.g. VPNs), which
+    // leaves the tunnel stuck serving Cloudflare 530 while the process
+    // stays alive. HTTP/2 over TCP is the precheck-recommended fallback
+    // and works through those same networks.
     const child = spawnFn(
       bin,
-      [
-        'tunnel',
-        '--no-autoupdate',
-        // QUIC (UDP 7844) is blocked on some networks (e.g. VPNs), which
-        // leaves the quick tunnel stuck serving Cloudflare 530 while the
-        // process stays alive. HTTP/2 over TCP is the precheck-recommended
-        // fallback and works through those same networks.
-        '--protocol',
-        'http2',
-        '--url',
-        `http://127.0.0.1:${this.opts.port}`,
-      ],
+      named
+        ? [
+            'tunnel',
+            '--no-autoupdate',
+            '--protocol',
+            'http2',
+            '--config',
+            this.opts.configPath!,
+            'run',
+            this.opts.tunnelName!,
+          ]
+        : [
+            'tunnel',
+            '--no-autoupdate',
+            '--protocol',
+            'http2',
+            '--url',
+            `http://127.0.0.1:${this.opts.port}`,
+          ],
       { stdio: ['ignore', 'pipe', 'pipe'] },
     );
     this.child = child;
+
+    if (named) {
+      // The public hostname is fixed by the DNS route and the ingress
+      // rules, not discovered from output: publish it as soon as a child
+      // exists so the menu button has a target even before the first
+      // outside probe succeeds. Re-fired on every respawn; MenuSync
+      // dedupes writes Telegram already has.
+      this.url = this.opts.fixedUrl!;
+      this.log(`tunnel url ${this.url}`);
+      this.opts.onUrl?.(this.url);
+    }
 
     // cloudflared banners the URL on stderr, but read both: which stream
     // carries it has moved between releases.

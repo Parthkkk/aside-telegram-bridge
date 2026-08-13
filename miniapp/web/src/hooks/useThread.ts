@@ -78,6 +78,11 @@ export interface ThreadState {
    * exec` that hangs forever against a suspended session.
    */
   suspended: boolean;
+  /**
+   * Whether `suspended` has an actual question behind it "Continue in a
+   * new session" can seed from. See `ThreadResponse.hasRecoverableQuestion`.
+   */
+  hasRecoverableQuestion: boolean;
   /** Characters streamed so far this turn, for the footer's estimate. */
   streamingChars: number;
   loading: boolean;
@@ -349,6 +354,7 @@ export function useThread(sessionId: string): ThreadState {
     parentId: meta?.parentId ?? null,
     todos,
     suspended: meta?.suspended ?? false,
+    hasRecoverableQuestion: meta?.hasRecoverableQuestion ?? false,
     streamingChars: streamText.length,
     loading,
     error,

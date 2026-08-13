@@ -99,8 +99,15 @@ const DEFAULT_MODEL_ALIASES: Record<string, string> = {
 
 /** The `miniapp` section of the bridge config. All of it is optional. */
 export interface MiniappSection {
-  /** `"cloudflared"` manages a public HTTPS tunnel; `"none"` stays local. */
-  tunnel: 'cloudflared' | 'none';
+  /**
+   * `"cloudflared"` manages a public HTTPS tunnel; `"none"` stays local;
+   * `"external"` means something outside this process (e.g. Tailscale
+   * Funnel, running under its own daemon) already publishes a FIXED
+   * public hostname at `tunnel_hostname`. In external mode nothing is
+   * spawned or supervised here -- the hostname cannot rotate, so the
+   * only job left is keeping the Telegram menu button pointed at it.
+   */
+  tunnel: 'cloudflared' | 'none' | 'external';
   /**
    * Register the Telegram menu button at the tunnel URL.
    *
@@ -117,6 +124,20 @@ export interface MiniappSection {
    * (audit M-6), rather than a flag that turns the check off.
    */
   cloudflaredPath: string;
+  /**
+   * Named tunnel: `cloudflared tunnel run <tunnelName>` with the
+   * cloudflared_config file. Empty means the quick tunnel, whose hostname
+   * rotates on every restart.
+   */
+  tunnelName: string;
+  /**
+   * Fixed public hostname of the named tunnel, e.g. `miniapp.example.com`
+   * (scheme and trailing slash tolerated, normalized away). Empty means
+   * the quick tunnel.
+   */
+  tunnelHostname: string;
+  /** cloudflared YAML config (ingress rules + credentials) for the named tunnel. */
+  cloudflaredConfig: string;
   logPath: string;
   /** Cap on the log file before it is rotated to `<name>.1`. */
   logMaxBytes: number;
@@ -129,6 +150,13 @@ export interface MiniappSection {
    * produce a dead link.
    */
   deepLinkBase: string | null;
+  /**
+   * Owner's first name, for the standalone greeting.
+   *
+   * Telegram hands this over on every launch. A paired home-screen app has
+   * no such source, so it is configured once rather than guessed.
+   */
+  ownerName: string;
 }
 
 export interface MiniappConfig {
@@ -157,6 +185,10 @@ export interface MiniappConfig {
   port: number;
   /** Where the HS256 signing secret is persisted (chmod 600, outside the repo). */
   secretPath: string;
+  /** whisper.cpp GGML model used for on-device speech-to-text. */
+  whisperModelPath: string;
+  /** Spoken language hint, or 'auto'. Pinning it is faster and more accurate. */
+  whisperLanguage: string;
   miniapp: MiniappSection;
 }
 
@@ -164,6 +196,19 @@ export function expandHome(p: string): string {
   if (p === '~') return os.homedir();
   if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
   return p;
+}
+
+/**
+ * A tunnel hostname as configured, reduced to bare `host.example.com`
+ * form: scheme and trailing slash tolerated, lowercased. Empty input
+ * stays empty, which is what keeps the quick-tunnel path unchanged.
+ */
+function normalizeTunnelHostname(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/+$/, '')
+    .toLowerCase();
 }
 
 /**
@@ -318,14 +363,28 @@ export function loadConfig(): MiniappConfig {
    * carries the bot token.
    */
   const tunnelOverride = process.env.MINIAPP_TUNNEL;
-  const wantsTunnel =
-    tunnelOverride === 'none'
-      ? false
-      : tunnelOverride === 'cloudflared' || section.tunnel === 'cloudflared';
+  const requested = tunnelOverride || section.tunnel;
+  /*
+   * `external` is only honoured with a hostname to point at. Without one
+   * there is nothing to register, and silently falling back to a quick
+   * tunnel would resurrect the rotating-URL bug this mode exists to kill,
+   * so it degrades to `none` instead.
+   */
+  const externalHost = normalizeTunnelHostname(
+    String(process.env.MINIAPP_TUNNEL_HOSTNAME || section.tunnel_hostname || ''),
+  );
+  const tunnelMode: 'cloudflared' | 'none' | 'external' =
+    requested === 'external'
+      ? externalHost
+        ? 'external'
+        : 'none'
+      : requested === 'cloudflared'
+        ? 'cloudflared'
+        : 'none';
   const menuOverride = process.env.MINIAPP_AUTO_REGISTER_MENU;
 
   const miniapp: MiniappSection = {
-    tunnel: wantsTunnel ? 'cloudflared' : 'none',
+    tunnel: tunnelMode,
     // Never defaulted on, and always off when the env says so. See
     // MiniappSection.
     autoRegisterMenu:
@@ -338,6 +397,20 @@ export function loadConfig(): MiniappConfig {
       String(process.env.MINIAPP_CLOUDFLARED_PATH ||
         section.cloudflared_path || ''),
     ),
+    tunnelName: String(
+      process.env.MINIAPP_TUNNEL_NAME || section.tunnel_name || '',
+    ).trim(),
+    tunnelHostname: normalizeTunnelHostname(
+      String(
+        process.env.MINIAPP_TUNNEL_HOSTNAME || section.tunnel_hostname || '',
+      ),
+    ),
+    cloudflaredConfig: expandHome(
+      String(
+        process.env.MINIAPP_CLOUDFLARED_CONFIG ||
+          section.cloudflared_config || '',
+      ),
+    ),
     logPath: expandHome(
       String(section.log_path || path.join(stateDir, 'miniapp.log')),
     ),
@@ -345,6 +418,7 @@ export function loadConfig(): MiniappConfig {
     deepLinkBase:
       String(process.env.MINIAPP_DEEPLINK || section.deep_link_base || '') ||
       null,
+    ownerName: String(section.owner_name || 'Parth'),
   };
 
   return {
@@ -373,6 +447,14 @@ export function loadConfig(): MiniappConfig {
     execTimeoutMs: Number(raw.exec_timeout_seconds || 1200) * 1000,
     port,
     secretPath,
+    whisperModelPath: expandHome(
+      String(
+        process.env.MINIAPP_WHISPER_MODEL ||
+          raw.whisper_model ||
+          path.join(stateDir, 'models', 'ggml-large-v3-turbo-q5_0.bin'),
+      ),
+    ),
+    whisperLanguage: String(raw.whisper_language || 'en'),
     miniapp,
   };
 }

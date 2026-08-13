@@ -14,6 +14,8 @@
  * capability-checked with a no-op fallback, because `requestFullscreen` and
  * friends return `UNSUPPORTED` on some clients -- see the Day 1 plan.
  */
+import { readLocal, removeLocal, writeLocal } from './utils/storage';
+
 
 interface WebAppUser {
   id: number;
@@ -287,6 +289,33 @@ function applySafeAreaVars(): void {
   root.setProperty('--shell-content-bottom', `${content?.bottom ?? 0}px`);
   root.setProperty('--shell-content-left', `${content?.left ?? 0}px`);
   root.setProperty('--shell-content-right', `${content?.right ?? 0}px`);
+
+  /*
+   * The inset our OWN header must clear.
+   *
+   * `contentSafeAreaInset` is supposed to describe exactly this -- the
+   * floating Back pill and the collapse/menu cluster Telegram draws over
+   * the page in fullscreen -- but several Android clients report it as 0
+   * while those buttons are still on screen. The result shipped: the
+   * app's own title row and back button sitting directly underneath
+   * Telegram's, both partially covering each other (verified from a
+   * screenshot: "Hello" as a session title rendered half behind the
+   * native Back pill).
+   *
+   * So in fullscreen we take whichever is larger -- what the client
+   * claims, or the status-bar inset plus the ~46px the floating cluster
+   * actually occupies on the clients that under-report. Outside
+   * fullscreen Telegram's header is a real bar that reserves its own
+   * space in the viewport, so the reported content inset is trusted as-is
+   * (adding the 46px buffer there would push our header down twice).
+   */
+  const fullscreen = Boolean(app?.isFullscreen);
+  const contentTop = content?.top ?? 0;
+  const chromeTop = fullscreen
+    ? Math.max(contentTop, (safe?.top ?? 0) + 46)
+    : contentTop;
+  root.setProperty('--tg-chrome-top', `${chromeTop}px`);
+  document.documentElement.dataset.fullscreen = fullscreen ? 'true' : 'false';
 }
 
 let safeAreaBound = false;
@@ -578,33 +607,70 @@ export const settingsButton = {
  *
  * Limits per Telegram's docs: 1024 keys, 4096 chars per value.
  */
+/**
+ * Every CloudStorage call is answered by the Telegram host and by nothing
+ * else, so a promise waiting on one of those callbacks hangs forever if the
+ * host is not really there.
+ *
+ * That is not hypothetical. Load `telegram-web-app.js` in an ordinary browser
+ * and `window.Telegram.WebApp.CloudStorage` exists and looks perfectly
+ * healthy; its callbacks simply never fire. Boot code that awaits one of them
+ * then never reaches `/api/auth`, and the app sits on its spinner with no
+ * error and no network activity to explain it.
+ *
+ * The standalone entry point drops the script tag entirely, which is the real
+ * fix. This is the belt to that pair of braces: past the deadline, fall back
+ * to local storage and get on with it. A stale cached value is a cosmetic
+ * problem. A permanent spinner is not.
+ */
+const CLOUD_TIMEOUT_MS = 1200;
+
+function withDeadline<T>(
+  attempt: (resolve: (value: T) => void) => void,
+  fallback: () => T,
+): Promise<T> {
+  return new Promise<T>((resolve) => {
+    let settled = false;
+    const finish = (value: T) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = window.setTimeout(() => finish(fallback()), CLOUD_TIMEOUT_MS);
+    try {
+      attempt(finish);
+    } catch {
+      finish(fallback());
+    }
+  });
+}
+
 export const cloudStorage = {
   async getItem(key: string): Promise<string | null> {
+    const local = () => readLocal(`miniapp.cloud.${key}`);
     const store = webApp()?.CloudStorage;
-    if (!store) return localStorage.getItem(`miniapp.cloud.${key}`);
-    return new Promise((resolve) => {
-      store.getItem(key, (err, value) => resolve(err ? null : value ?? null));
-    });
+    if (!store) return local();
+    return withDeadline<string | null>(
+      (done) => store.getItem(key, (err, value) => done(err ? null : value ?? null)),
+      local,
+    );
   },
   async setItem(key: string, value: string): Promise<void> {
+    const local = () => {
+      writeLocal(`miniapp.cloud.${key}`, value);
+    };
     const store = webApp()?.CloudStorage;
-    if (!store) {
-      localStorage.setItem(`miniapp.cloud.${key}`, value);
-      return;
-    }
-    return new Promise((resolve) => {
-      store.setItem(key, value, () => resolve());
-    });
+    if (!store) return local();
+    return withDeadline<void>((done) => store.setItem(key, value, () => done()), local);
   },
   async removeItem(key: string): Promise<void> {
+    const local = () => {
+      removeLocal(`miniapp.cloud.${key}`);
+    };
     const store = webApp()?.CloudStorage;
-    if (!store) {
-      localStorage.removeItem(`miniapp.cloud.${key}`);
-      return;
-    }
-    return new Promise((resolve) => {
-      store.removeItem(key, () => resolve());
-    });
+    if (!store) return local();
+    return withDeadline<void>((done) => store.removeItem(key, () => done()), local);
   },
 };
 

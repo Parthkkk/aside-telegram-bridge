@@ -4,6 +4,11 @@
 
 Text your [Aside](https://aside.so) browser agent from your phone.
 
+> **Want it as a real app instead of a Telegram chat?** See
+> [MOBILE.md](MOBILE.md) for the standalone phone app: a native Android APK
+> with Google Search running inside it, or a home-screen web app on iPhone.
+> Both talk to your Mac over Tailscale, with nothing exposed to the internet.
+
 Your full Aside agent -- tools, memory, everything -- living in a Telegram
 chat. Ask it things, send it photos, give it multi-step tasks, watch live
 progress fold into a tidy collapsible worklog when it's done.

@@ -6,6 +6,10 @@ import './theme/tokens.css';
 import './theme/base.css';
 import './theme/components.css';
 import App from './App';
+import { registerServiceWorker } from './standalone';
+
+// Installability, and only from the standalone entry point. See standalone.ts.
+registerServiceWorker();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

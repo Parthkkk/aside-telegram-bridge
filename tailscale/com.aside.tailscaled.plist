@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  tailscaled in userspace-networking mode.
+
+  Userspace rather than a TUN device is what keeps this a plain user agent:
+  no root, no kernel extension, no password prompt. The trade is that this Mac
+  cannot route OUT to other tailnet machines, which does not matter, because
+  the only job here is accepting connections IN from the phone and proxying
+  them to the mini app on 127.0.0.1:8790.
+
+  The SOCKS and HTTP proxy listeners exist so the machine can still reach its
+  own tailnet name for health checks, which is otherwise impossible without a
+  TUN device.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.aside.tailscaled</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/tailscaled</string>
+        <string>--tun=userspace-networking</string>
+        <string>--socks5-server=localhost:1055</string>
+        <string>--outbound-http-proxy-listen=localhost:1056</string>
+        <string>--socket=/Users/parth/.aside-telegram-bridge/tailscale/ts.sock</string>
+        <string>--statedir=/Users/parth/.aside-telegram-bridge/tailscale/state</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/parth/.aside-telegram-bridge/tailscale/tailscaled.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/parth/.aside-telegram-bridge/tailscale/tailscaled.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

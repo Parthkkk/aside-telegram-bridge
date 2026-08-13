@@ -308,6 +308,15 @@ export interface ThreadResponse {
    * would hang. See `server/src/questions.ts`.
    */
   suspended: boolean;
+  /**
+   * Whether `suspended` has an actual question behind it that "Continue
+   * in a new session" can seed from. `suspended` can be true with this
+   * false: the driver that hit the native tool was reaped before the
+   * write that would have produced a clean question item landed. The
+   * composer's recover button uses this to know in advance rather than
+   * finding out from a 409.
+   */
+  hasRecoverableQuestion?: boolean;
   items: ThreadItem[];
   /** The agent's task list, replayed from its `write_todos` calls. */
   todos: Todo[];
@@ -525,4 +534,103 @@ export interface TabCapture {
  */
 export interface RoutineRow {
   [key: string]: unknown;
+}
+
+/*
+ * Web search results, produced by the Mac's own browser rather than by a
+ * search API. `tookMs` is surfaced because a real browser round trip is
+ * seconds rather than milliseconds, and showing the cost is friendlier than
+ * an unexplained wait.
+ */
+export type SearchVertical = 'web' | 'images' | 'videos' | 'news';
+
+export interface WebSearchResult {
+  title: string;
+  url: string;
+  domain: string;
+  snippet: string;
+  /** Present on video and news results. */
+  thumbnail?: string;
+  /** A duration like "12:04", or an age like "8 hours ago". */
+  meta?: string;
+}
+
+export interface WebImageResult {
+  thumbnail: string;
+  pageUrl: string;
+  alt: string;
+  domain: string;
+}
+
+export interface WebSearchAnswer {
+  text: string;
+  source?: string;
+}
+
+export interface WebSearchResponse {
+  query: string;
+  vertical: SearchVertical;
+  results: WebSearchResult[];
+  images: WebImageResult[];
+  answer?: WebSearchAnswer;
+  /** "People also ask" questions. */
+  questions: string[];
+  related: string[];
+  tookMs: number;
+  cached?: boolean;
+}
+
+/*
+ * A row from the Aside browser's own Chromium history database. This is
+ * the desktop profile's real history, not a log kept by the bridge, which
+ * is why it can be trusted to match what the Mac shows.
+ */
+export interface BrowserHistoryEntry {
+  url: string;
+  title: string;
+  domain: string;
+  visitCount: number;
+  /** Unix milliseconds; 0 when the source row had no usable timestamp. */
+  lastVisit: number;
+}
+
+export interface BrowserHistoryResponse {
+  entries: BrowserHistoryEntry[];
+  query: string;
+}
+
+/*
+ * One row under the address bar.
+ *
+ * Three shapes because a browser's typeahead answers three different
+ * questions at once: go here, go back to where you were, or search for
+ * this. They are drawn differently and they do different things on tap,
+ * so they are separate variants rather than one row with optional fields.
+ */
+export type OmniboxItem =
+  | { kind: 'url'; url: string; text: string }
+  | {
+      kind: 'page';
+      title: string;
+      url: string;
+      domain: string;
+      lastVisit: number;
+      /** Which device this was visited on. */
+      source: 'mac' | 'phone';
+    }
+  | {
+      kind: 'search';
+      text: string;
+      /** `history` is a query typed on this phone before. */
+      source: 'suggest' | 'history';
+    };
+
+export interface OmniboxResponse {
+  query: string;
+  items: OmniboxItem[];
+}
+
+export interface BrowseRecentResponse {
+  items: OmniboxItem[];
+  query: string;
 }

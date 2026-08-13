@@ -42,6 +42,10 @@ import {
   Copy as CopyIcon,
   PanelRight,
   Download,
+  Trash2 as TrashIcon,
+  RotateCw,
+  ExternalLink,
+  ArrowLeft,
 } from 'lucide-react';
 import type { StepIcon } from '../types';
 
@@ -76,6 +80,11 @@ export {
   PanelRight,
   Download,
   Globe,
+  TrashIcon,
+  Clock,
+  RotateCw,
+  ExternalLink,
+  ArrowLeft,
 };
 
 /**

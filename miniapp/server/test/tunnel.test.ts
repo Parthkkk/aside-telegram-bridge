@@ -212,6 +212,100 @@ describe('Tunnel', () => {
   });
 });
 
+describe('named tunnel mode', () => {
+  it('runs `tunnel run` with the config file and reports the fixed URL', async () => {
+    const child = fakeChild();
+    const urls: string[] = [];
+    let args: string[] = [];
+    const tunnel = new Tunnel({
+      port: 8790,
+      binDir: '/tmp/unused',
+      fixedUrl: 'https://miniapp.example.com',
+      tunnelName: 'aside-miniapp',
+      configPath: '/Users/me/.cloudflared/aside-miniapp.yml',
+      onUrl: (url) => urls.push(url),
+      spawnFn: ((cmd: string, argv: string[]) => {
+        args = argv;
+        return child;
+      }) as any,
+      downloadFn: async () => {},
+    });
+
+    await tunnel.start();
+    expect(args).toEqual([
+      'tunnel',
+      '--no-autoupdate',
+      '--protocol',
+      'http2',
+      '--config',
+      '/Users/me/.cloudflared/aside-miniapp.yml',
+      'run',
+      'aside-miniapp',
+    ]);
+    // The fixed hostname is published without waiting for output.
+    expect(urls).toEqual(['https://miniapp.example.com']);
+    expect(tunnel.url).toBe('https://miniapp.example.com');
+    tunnel.stop();
+  });
+
+  it('ignores quick-tunnel banner output when the URL is fixed', async () => {
+    const child = fakeChild();
+    const urls: string[] = [];
+    const tunnel = new Tunnel({
+      port: 8790,
+      binDir: '/tmp/unused',
+      fixedUrl: 'https://miniapp.example.com',
+      tunnelName: 'aside-miniapp',
+      configPath: '/tmp/cfg.yml',
+      onUrl: (url) => urls.push(url),
+      spawnFn: (() => child) as any,
+      downloadFn: async () => {},
+    });
+
+    await tunnel.start();
+    child.stderr.push(BANNER);
+    await new Promise((r) => setImmediate(r));
+    expect(urls).toEqual(['https://miniapp.example.com']);
+    expect(tunnel.url).toBe('https://miniapp.example.com');
+    tunnel.stop();
+  });
+
+  it('reports the fixed URL again after an exit so the watchdog resumes', async () => {
+    const child = fakeChild();
+    const urls: string[] = [];
+    const tunnel = new Tunnel({
+      port: 8790,
+      binDir: '/tmp/unused',
+      fixedUrl: 'https://miniapp.example.com',
+      tunnelName: 'aside-miniapp',
+      configPath: '/tmp/cfg.yml',
+      onUrl: (url) => urls.push(url),
+      spawnFn: (() => child) as any,
+      downloadFn: async () => {},
+    });
+
+    await tunnel.start();
+    expect(tunnel.url).toBe('https://miniapp.example.com');
+    // A recycle nulls the URL; the exit handler then restarts the child
+    // and the fixed URL is republished when it comes back up.
+    tunnel.recycle('test');
+    child.emit('exit', 0);
+    await new Promise((r) => setImmediate(r));
+    expect(tunnel.url).toBeNull();
+    tunnel.stop();
+  });
+
+  it('refuses a partial named-tunnel config instead of silently rotating', async () => {
+    const tunnel = new Tunnel({
+      port: 8790,
+      binDir: '/tmp/unused',
+      fixedUrl: 'https://miniapp.example.com',
+      downloadFn: async () => {},
+    });
+    await expect(tunnel.start()).rejects.toThrow(/tunnel_hostname/);
+  });
+});
+
 describe('menu button', () => {
   it('builds the Telegram web_app payload', () => {
     expect(

@@ -21,6 +21,9 @@ import type {
   ThreadStats,
   Todo,
   UploadedFile,
+  BrowserHistoryResponse,
+  OmniboxResponse,
+  BrowseRecentResponse,
 } from './types';
 
 export class ApiError extends Error {
@@ -44,7 +47,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (init.body) headers.set('content-type', 'application/json');
   if (authToken) headers.set('authorization', `Bearer ${authToken}`);
 
-  const res = await fetch(path, { ...init, headers });
+  // `same-origin` rather than the default: the server keeps a long-lived
+  // HttpOnly session cookie that lets the installed app recover its token
+  // after localStorage has been cleared, and the cookie only rides along if
+  // credentials are asked for explicitly.
+  const res = await fetch(path, { ...init, credentials: 'same-origin', headers });
   const text = await res.text();
   const body = text ? JSON.parse(text) : {};
   if (!res.ok) {
@@ -59,6 +66,103 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ initDataRaw }),
     }),
+
+  /**
+   * Standalone bootstrap for the installed app.
+   *
+   * Same JWT spine as `auth`, different front door: there is no Telegram to
+   * hand us an initData blob when the app was opened from the home screen.
+   */
+  pair: (key: string) =>
+    request<{ token: string; name?: string; expiresIn: number }>('/api/pair', {
+      method: 'POST',
+      body: JSON.stringify({ key }),
+    }),
+
+  /**
+   * Trade the session cookie for a fresh token.
+   *
+   * Called at boot when the app has nothing usable in storage. A 401 here
+   * is the genuine "never paired, or paired too long ago" case; anything
+   * else means the token survived and the owner is not asked to re-pair.
+   */
+  session: () =>
+    request<{ token: string; name?: string; expiresIn: number }>(
+      '/api/session',
+    ),
+
+  /**
+   * The Aside browser's own visit history, straight from the desktop
+   * profile. Cheap enough (an indexed read of a local SQLite file) to call
+   * whenever the panel opens.
+   */
+  browserHistory: (query = '', limit = 40, signal?: AbortSignal) =>
+    request<BrowserHistoryResponse>(
+      `/api/history/browser?q=${encodeURIComponent(query)}&limit=${limit}`,
+      { signal },
+    ),
+
+  /**
+   * Address-bar suggestions: Google's live suggestions blended with what
+   * has been visited on either device.
+   *
+   * Called per keystroke, so the caller is expected to debounce and to
+   * pass a signal. The server never fails this call for a slow upstream:
+   * a suggest timeout degrades to a history-only list rather than an
+   * error, because there is nothing useful a typeahead can say about a
+   * network problem.
+   */
+  omnibox: (query: string, signal?: AbortSignal) =>
+    request<OmniboxResponse>(`/api/omnibox?q=${encodeURIComponent(query)}`, {
+      signal,
+    }),
+
+  /** Unified recent history across both devices. */
+  browseRecent: (limit = 60, signal?: AbortSignal) =>
+    request<BrowseRecentResponse>(`/api/browse/recent?limit=${limit}`, {
+      signal,
+    }),
+
+  /**
+   * Record a search or page open made on the phone.
+   *
+   * Fire-and-forget by design: this feeds the address bar's ranking, and
+   * a failed write is not worth interrupting a navigation the owner has
+   * already committed to.
+   */
+  recordVisit: (input: { kind: 'search' | 'page'; title: string; url: string }) =>
+    request<{ visit: unknown }>('/api/browse/visit', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }).catch(() => undefined),
+
+  /**
+   * Speech to text, decoded on the Mac.
+   *
+   * Deliberately not routed through `request`: this is multipart, not JSON,
+   * and setting a content-type by hand would strip the boundary the server
+   * needs to parse the body.
+   */
+  transcribe: async (audio: Blob, signal?: AbortSignal): Promise<string> => {
+    const form = new FormData();
+    // The extension is a hint for ffmpeg's sniffer, nothing more -- it probes
+    // the real container regardless of what we claim here.
+    form.append('audio', audio, 'recording.webm');
+    const headers = new Headers();
+    if (authToken) headers.set('authorization', `Bearer ${authToken}`);
+    const res = await fetch('/api/transcribe', {
+      method: 'POST',
+      body: form,
+      headers,
+      signal,
+    });
+    const text = await res.text();
+    const body = text ? JSON.parse(text) : {};
+    if (!res.ok) {
+      throw new ApiError(res.status, body.reason || body.error || res.statusText);
+    }
+    return String(body.text || '');
+  },
 
   sessions: (limit = 100) =>
     request<{ sessions: SessionRow[]; source: string }>(
@@ -152,6 +256,21 @@ export const api = {
     request<{ sessionId: string; accepted: boolean; from: string }>(
       `/api/sessions/${encodeURIComponent(sessionId)}/recover`,
       { method: 'POST', body: JSON.stringify(payload) },
+    ),
+
+  /**
+   * Delete a chat.
+   *
+   * Server-side this archives rather than destroys -- the daemon has no
+   * destructive session verb, and archived sessions are already excluded
+   * from every list this app reads, so the phone-visible effect is total.
+   * Named `deleteSession` because that is what the button says and what
+   * the user means; the server comment carries the nuance.
+   */
+  deleteSession: (sessionId: string) =>
+    request<{ ok: boolean; id: string }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}`,
+      { method: 'DELETE' },
     ),
 
   /**

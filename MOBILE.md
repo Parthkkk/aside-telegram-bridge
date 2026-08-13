@@ -1,0 +1,298 @@
+# Aside Mobile
+
+Your Mac's [Aside](https://aside.so) agent as a real app on your phone.
+Chat, watch the browser live, search your Mac's history, talk to it, and get
+a push when a long task finishes.
+
+This is the Mini App installed to a phone rather than opened in Telegram. It
+talks to your Mac over Tailscale, so nothing is exposed to the internet.
+
+**Android** gets a native APK with Google Search rendered inside the app.
+**iPhone** gets a home-screen web app. Same server behind both.
+
+If you only want the Telegram bot, see [README.md](README.md); the installer
+there does everything. This guide is for the standalone phone app.
+
+---
+
+## Handing this to an AI agent
+
+This is written to be executed top to bottom without questions. Give an
+agent the repo link and say:
+
+> Set up the standalone mobile app. Follow MOBILE.md top to bottom. Ask me
+> only when you need a password, my phone in my hand, or a decision.
+
+Every step says how to check it worked.
+
+---
+
+## What you need
+
+**Mac:** macOS with [Aside](https://aside.so) installed and signed in. That
+is the only thing assumed. Admin password once, for Tailscale. About 1GB
+free, plus 4GB more to build the Android app.
+
+**Phone:** the Tailscale app, signed into the same account, connected. The
+Mac is only reachable over the tailnet, so without it the app has nothing to
+talk to. Android 8.0+ or iOS 16.4+.
+
+Free throughout. No Apple Developer account, no Play Console, no paid tunnel.
+
+---
+
+## 1. Toolchain
+
+```bash
+which brew || /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+export PATH="/opt/homebrew/bin:$PATH"
+echo 'export PATH="/opt/homebrew/bin:$PATH"' >> ~/.zshrc
+brew install node
+node --version   # v20 or newer
+```
+
+Apple Silicon puts Homebrew in `/opt/homebrew`, which is not on the default
+`PATH`, which is why that line is there.
+
+## 2. Code
+
+```bash
+git clone https://github.com/Parthkkk/aside-telegram-bridge.git ~/.aside-telegram-bridge
+cd ~/.aside-telegram-bridge/miniapp
+npm install
+```
+
+Covers `server/` and `web/` together. A couple of minutes.
+
+## 3. Tailscale
+
+This is what makes the Mac reachable from the phone without opening a port
+to the internet.
+
+```bash
+brew install --cask tailscale
+open -a Tailscale
+```
+
+Sign in, then do the same on the phone with the same account. Confirm:
+
+```bash
+/Applications/Tailscale.app/Contents/MacOS/Tailscale status
+```
+
+Capture the Mac's tailnet hostname, which several later steps want:
+
+```bash
+export ASIDE_TAILNET_HOST=$(/Applications/Tailscale.app/Contents/MacOS/Tailscale status --json \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')
+echo "export ASIDE_TAILNET_HOST=$ASIDE_TAILNET_HOST" >> ~/.zshrc
+echo "$ASIDE_TAILNET_HOST"     # looks like your-mac.tail1234.ts.net
+```
+
+Turn on HTTPS in the [Tailscale admin console](https://login.tailscale.com/admin/dns)
+under **HTTPS Certificates**. You get a real Let's Encrypt certificate for
+that hostname. This is required: a phone browser rejects a self-signed
+certificate, and Web Push needs genuine HTTPS.
+
+Put the server behind it:
+
+```bash
+/Applications/Tailscale.app/Contents/MacOS/Tailscale serve --bg 8790
+/Applications/Tailscale.app/Contents/MacOS/Tailscale serve status
+```
+
+## 4. Server
+
+```bash
+cd ~/.aside-telegram-bridge/miniapp/server
+npm run build
+npm start
+```
+
+First run generates its own signing secret at
+`~/.aside-telegram-bridge/miniapp-secret.json`, `chmod 600`. It never enters
+the repo.
+
+```bash
+curl -s http://127.0.0.1:8790/api/health              # {"ok":true}
+curl -sI "https://$ASIDE_TAILNET_HOST/app" | head -1  # HTTP/2 200
+```
+
+If the second fails, Tailscale HTTPS is not on yet. Back to step 3.
+
+### Keeping it up
+
+The phone needs the Mac awake and the server running.
+
+- **Stop the Mac sleeping.** [Amphetamine](https://apps.apple.com/app/amphetamine/id937984704)
+  is free, or System Settings, Battery, prevent sleeping while on power.
+- **Keep the server alive.** Leave `npm start` in a terminal, or install a
+  launchd job so it survives a reboot.
+
+## 5. Pair
+
+On the Mac, open <http://127.0.0.1:8790/pair>.
+
+That page is bound to loopback, so a device already on your tailnet still
+cannot reach it. Pairing requires physical access to the Mac.
+
+It shows a QR code and a link. What happens next depends on the phone.
+
+---
+
+## Android
+
+### Build it
+
+```bash
+brew install --cask temurin@21
+brew install --cask android-commandlinetools
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+export ANDROID_HOME=$HOME/Library/Android/sdk
+sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+cd ~/.aside-telegram-bridge
+./build-android.sh
+```
+
+The script resolves your tailnet hostname, bakes in a pairing key so the app
+is already paired on first open, builds, and publishes to
+`https://<your-tailnet-host>/Aside-mobile.apk`. Open that on the phone and
+allow installs from unknown sources.
+
+**Expect about 99MB.** Reason below.
+
+**If Gradle gets killed on an 8GB Mac**, that is memory. The script already
+passes what avoids it:
+
+```
+--no-daemon --max-workers=1 -Dorg.gradle.jvmargs="-Xmx1280m -XX:MaxMetaspaceSize=384m"
+```
+
+Leave those alone.
+
+### Why 99MB
+
+Search runs inside the app, and staying signed into Google is what costs the
+space.
+
+Android's WebView stamps every request with an `X-Requested-With` header
+naming the host app. Google reads it and refuses to sign you in. The header
+cannot be removed; the opt-out was withdrawn in 2025. Google also
+fingerprints the JS environment and the TLS handshake, so spoofing the user
+agent fails too.
+
+A Chrome Custom Tab stays signed in, and ordinary links still use one. Its
+toolbar cannot be hidden, because showing the true origin is the point of it.
+
+So search renders with [GeckoView](https://mozilla.github.io/geckoview/),
+Firefox's engine embedded as an Android view. Google sees a real browser,
+your account works, and it paints in a window the app owns with nothing on
+top. Gecko's native libraries are the size.
+
+Only `arm64-v8a` ships, covering phones from roughly 2017 on. Add ABIs in
+`miniapp/web/android/app/build.gradle` for an emulator.
+
+---
+
+## iPhone
+
+No App Store, no Xcode, no developer account. It installs as a home-screen
+web app.
+
+Apple requires WebKit for every iOS browser, so the GeckoView approach
+cannot be ported. Alternative engines exist only under an EU-restricted
+entitlement. A native wrapper would also need re-signing every 7 days on a
+free Apple ID. The web app avoids all of that and costs nothing.
+
+### Install
+
+1. On the iPhone, open **Safari** and go to
+   `https://<your-tailnet-host>/app`. It has to be Safari. Chrome and
+   Firefox on iOS have no Add to Home Screen.
+2. **Share**, then **Add to Home Screen**, then **Add**.
+3. Open Aside from the home screen. Not from Safari.
+4. It asks to be paired. Copy the pairing link from
+   <http://127.0.0.1:8790/pair> on the Mac and paste it in. Universal
+   Clipboard makes that a copy on one device and a paste on the other.
+
+**Step 3 matters, and step 4 is the consequence.** iOS gives a Safari tab
+and an installed web app separate storage. Pairing in Safari then installing
+leaves you with an app that has never seen your key, so it asks directly.
+Paste the whole link; it extracts the key.
+
+Installing also earns two things a tab never gets:
+
+- **Push notifications.** WebKit exposes the Push API only to installed web
+  apps.
+- **Storage that survives.** Safari wipes script-writable storage for idle
+  sites after 7 days. Installed web apps are exempt, so you stay paired.
+
+### Difference from Android
+
+Chat, voice, history, browser view, push and uploads all behave the same.
+Search differs: a result opens iOS's in-app browser overlay, signed in and
+without leaving the app, but carrying a small toolbar. Apple's engine rules
+make the Android behaviour unavailable.
+
+---
+
+## Layout
+
+```
+miniapp/
+  server/    Fastify API on :8790, talks to the Aside daemon
+  web/       React + Vite front end, and the Capacitor Android shell
+    android/ Native project; GeckoView lives in BrowserActivity.java
+    scripts/ gen-splash.mjs regenerates the iOS launch screens
+build-android.sh   Builds and publishes the APK
+tailscale/         Certificate helpers
+```
+
+```bash
+cd miniapp/web && npx vitest run      # 198 tests
+cd miniapp/server && npx vitest run   # 525 tests
+```
+
+---
+
+## Security
+
+- Nothing listens on the public internet. The server binds loopback;
+  Tailscale is the only way in.
+- The pairing page is loopback-only, so tailnet access alone cannot pair a
+  device.
+- The signing secret is per-install, `chmod 600`, outside the repo, and
+  gitignored.
+- Sessions are JWTs with a cookie fallback, so an evicted browser store does
+  not force re-pairing.
+- No Anthropic credentials live here. It talks to the Aside daemon already
+  running on the Mac.
+
+---
+
+## When it breaks
+
+**Blank screen on open.** The Mac is unreachable. Check Tailscale on both
+devices, that the Mac is awake, and that
+`curl -sI https://$ASIDE_TAILNET_HOST/app` returns 200.
+
+**"Can't reach your Mac."** Server stopped or the Mac slept. `npm start`
+again and turn on Amphetamine.
+
+**Pairing rejected.** Keys are single-use. Reload
+<http://127.0.0.1:8790/pair>.
+
+**iPhone asks to pair every launch.** You are in a Safari tab. Install to
+the home screen, then pair inside the installed app.
+
+**Gradle killed.** Out of memory. Keep the flags, close other apps, do not
+enable the Gradle daemon.
+
+**APK will not install.** Allow unknown sources for whichever app opens the
+link, and remove any older copy signed with a different key.
+
+---
+
+Built on [SaiAmartya/aside-telegram-bridge](https://github.com/SaiAmartya/aside-telegram-bridge).
+MIT, copyright SaiAmartya and Parth Khavate. See [LICENSE](LICENSE).

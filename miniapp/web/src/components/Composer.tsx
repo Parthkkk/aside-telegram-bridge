@@ -17,7 +17,7 @@
  * faithfully from a phone, and offering a control that cannot work is
  * worse than not offering it.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowUp,
   ChevronDown,
@@ -30,6 +30,7 @@ import {
   X,
 } from './Icons';
 import { ContextRing } from './ContextRing';
+import { VoiceButton } from './VoiceButton';
 import { haptic, showConfirm } from '../telegram';
 import type { ComposerAttachment } from '../types';
 import { pillModelLabel } from '../utils/pills';
@@ -78,6 +79,21 @@ export interface ComposerProps {
    */
   blockedReason?: string | null;
   /**
+   * The way out of `blockedReason`, when there is one.
+   *
+   * A suspended session's own question card carries a "Continue in a new
+   * session" button, but that card only renders when the transcript
+   * parsed a clean native-question item. When it did not -- the driver
+   * was reaped mid tool-call and the write never landed -- the banner had
+   * nothing to tap. This puts the same escape hatch directly under the
+   * banner so it is never just a dead end.
+   */
+  onRecover?: () => void;
+  /** Between tapping the recover button and the new session existing. */
+  recovering?: boolean;
+  /** Button copy for `onRecover`. Defaults to "Continue in a new session". */
+  recoverLabel?: string;
+  /**
    * Context-window occupancy, drawn as a ring beside the model pill.
    * Absent on home, where there is no session to measure.
    */
@@ -122,6 +138,22 @@ export function Pill({
  * what the owner reaches for.
  */
 const ACCEPT = 'image/*,application/pdf,.txt,.md,.csv,.json';
+
+/**
+ * Whether the primary input is a finger rather than a keyboard.
+ *
+ * `pointer: coarse` is the honest test: it asks the browser about the
+ * primary pointing device instead of sniffing a user-agent string, and it
+ * is what Telegram's iOS/Android webviews report. Desktop Telegram and a
+ * plain browser tab report `fine` and keep Enter-to-send.
+ *
+ * Guarded because `matchMedia` is absent in the jsdom test environment,
+ * where the desktop behaviour is the one being asserted.
+ */
+function isTouchPrimary(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  return window.matchMedia('(pointer: coarse)').matches;
+}
 
 /** One attachment chip: an image thumbnail, or a doc icon and its name. */
 function AttachmentChip({
@@ -208,11 +240,21 @@ export function Composer({
   onStop,
   stopping,
   blockedReason,
+  onRecover,
+  recovering,
+  recoverLabel,
   context,
   above,
 }: ComposerProps) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  /**
+   * Last voice problem, shown under the input and cleared on the next
+   * successful take. Deliberately not a toast: the thing that went wrong is
+   * about this control, so it belongs next to this control.
+   */
+  const [voiceError, setVoiceError] = useState<string | null>(null);
 
   // Grow with the content instead of scrolling inside a fixed box, which
   // is what the sidepanel composer does.
@@ -239,13 +281,19 @@ export function Composer({
   };
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter sends; Shift+Enter is a newline. On phones the virtual
-    // keyboard's return key inserts a newline, so the button is the
-    // primary path there.
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      submit();
-    }
+    if (event.key !== 'Enter' || event.shiftKey) return;
+    // On a touch device the return key is a NEWLINE, always. The arrow
+    // button is the only way to send.
+    //
+    // This is not a preference, it is the difference between the composer
+    // being usable and not. A phone keyboard's return key is where your
+    // thumb already is, so "Enter sends" means every paragraph break fires
+    // a half-written message, and there is no Shift to hold. Desktop keeps
+    // Enter-to-send because there a keyboard shortcut is faster than a
+    // trip to the mouse.
+    if (isTouchPrimary()) return;
+    event.preventDefault();
+    submit();
   };
 
   return (
@@ -254,7 +302,23 @@ export function Composer({
       {above}
 
       {blockedReason ? (
-        <p className="composer-blocked">{blockedReason}</p>
+        <div className="composer-blocked-block">
+          <p className="composer-blocked">{blockedReason}</p>
+          {onRecover ? (
+            <button
+              type="button"
+              className="question-recover"
+              disabled={Boolean(recovering)}
+              onClick={onRecover}
+            >
+              {recovering ? (
+                <Spinner size={13} />
+              ) : (
+                recoverLabel || 'Continue in a new session'
+              )}
+            </button>
+          ) : null}
+        </div>
       ) : null}
 
       {attachments.length ? (
@@ -281,6 +345,12 @@ export function Composer({
         rows={1}
         disabled={blocked}
       />
+
+      {voiceError ? (
+        <p className="composer-voice-error" role="status">
+          {voiceError}
+        </p>
+      ) : null}
 
       <div className="composer-actions">
         {/*
@@ -364,6 +434,37 @@ export function Composer({
             {stopping ? <Spinner size={14} /> : <StopSquare size={14} />}
           </button>
         ) : null}
+
+        {/*
+          Dictation sits immediately to the LEFT of send, which is where
+          Aside's own desktop composer puts it and where every other app
+          that has both controls puts it.
+
+          It used to live over on the left next to `+`, grouped with the
+          setup controls (attach, permission, model). That grouping is
+          wrong: attaching a file and choosing a model are things you do
+          BEFORE composing, while dictating is composing. Putting it at the
+          send end means the two ways to finish a message -- say it or send
+          it -- are under the same thumb, and the thumb never crosses the
+          keyboard to reach the other side of the screen.
+
+          Deliberately AFTER the stop button rather than before it, so the
+          mic stays adjacent to send even mid-turn when stop appears. A
+          control that shifts position depending on whether the agent is
+          talking is a control you have to look for.
+        */}
+        <VoiceButton
+          disabled={blocked}
+          onError={setVoiceError}
+          onTranscript={(text) => {
+            setVoiceError(null);
+            // Append rather than replace: dictation is one more way to add to
+            // the message, so it has to compose with whatever is already typed.
+            const base = value.trimEnd();
+            onChange(base ? `${base} ${text}` : text);
+            textarea.current?.focus();
+          }}
+        />
 
         <button
           type="button"

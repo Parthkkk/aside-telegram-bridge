@@ -34,6 +34,7 @@ import { Markdown } from './Markdown';
 import { WorkFold } from './WorkFold';
 import { ErrorCard } from './ErrorCard';
 import { QuestionCard } from './QuestionCard';
+import { PressReveal } from './PressReveal';
 import type { CitationMark } from '../utils/citations';
 
 function BubbleAttachments({ files }: { files: Attachment[] }) {
@@ -140,12 +141,22 @@ function renderItem(
 ) {
   if (item.kind === 'user') {
     return (
-      <div className={`user-bubble ${item.pending ? 'is-pending' : ''}`}>
-        {item.attachments?.length ? (
-          <BubbleAttachments files={item.attachments} />
-        ) : null}
-        {item.text}
-      </div>
+      <PressReveal
+        className="turn turn-user"
+        text={item.text}
+        align="end"
+        // Not while pending. A message that has not come back from the
+        // transcript yet can still fail, and offering to copy it implies
+        // it is a settled part of the conversation.
+        enabled={!item.pending}
+      >
+        <div className={`user-bubble ${item.pending ? 'is-pending' : ''}`}>
+          {item.attachments?.length ? (
+            <BubbleAttachments files={item.attachments} />
+          ) : null}
+          {item.text}
+        </div>
+      </PressReveal>
     );
   }
   if (item.kind === 'work') {
@@ -174,16 +185,25 @@ function renderItem(
       />
     );
   }
+  const streaming = item.kind === 'streaming';
   return (
-    <div className="answer">
-      <Markdown
-        text={item.text}
-        streaming={item.kind === 'streaming'}
-        sources={props.sources}
-        sessionId={props.sessionId}
-        onOpenCitation={props.onOpenCitation}
-      />
-    </div>
+    <PressReveal
+      className="turn turn-answer"
+      text={item.text}
+      // No hold on a streaming block. The text is still arriving, so a copy
+      // taken now is a truncated answer.
+      enabled={!streaming}
+    >
+      <div className="answer">
+        <Markdown
+          text={item.text}
+          streaming={streaming}
+          sources={props.sources}
+          sessionId={props.sessionId}
+          onOpenCitation={props.onOpenCitation}
+        />
+      </div>
+    </PressReveal>
   );
 }
 

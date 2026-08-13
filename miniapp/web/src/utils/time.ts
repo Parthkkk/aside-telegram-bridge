@@ -41,3 +41,67 @@ export function workedFor(ms: number): string {
   if (minutes) return `${minutes}m ${seconds}s`;
   return `${seconds}s`;
 }
+
+/**
+ * The bucket a chat belongs to in the history list.
+ *
+ * The list used to be one undifferentiated run of rows, which is why it
+ * read as a pile rather than as history: with only "3 days ago" on each
+ * row there is nothing to scan by, and the eye has to read every line to
+ * find where this week ends and last month begins.
+ *
+ * The bands are Claude's and, before that, every mail client's, because
+ * they match how people actually search their own past: today, yesterday,
+ * this week, this month, then by month.
+ *
+ * Pure and exported so it can be tested against fixed clocks rather than
+ * against whatever "now" happens to be when the suite runs.
+ */
+export function dayBucket(ms: number, now = Date.now()): string {
+  const then = new Date(ms);
+  const days = Math.floor(
+    (startOfDay(new Date(now)) - startOfDay(then)) / 86_400_000,
+  );
+
+  if (days <= 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return 'Previous 7 days';
+  if (days < 30) return 'Previous 30 days';
+
+  // Older than a month: label by month, and add the year once it is not
+  // the current one, so "March" cannot silently mean either of two Marches.
+  const sameYear = then.getFullYear() === new Date(now).getFullYear();
+  return then.toLocaleDateString(undefined, {
+    month: 'long',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  });
+}
+
+function startOfDay(date: Date): number {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+/**
+ * The short stamp on a history row: "2:32 PM" today, "Mon" within the
+ * week, "12 Mar" beyond it.
+ *
+ * `relativeTime`'s spelled-out form ("13 hours ago") is right in a work
+ * fold, where the duration is the point. In a dense list it is the longest
+ * thing on the row, and it crowds the title -- the thing actually being
+ * scanned -- with information the group heading has already given.
+ */
+export function listTime(ms: number, now = Date.now()): string {
+  const then = new Date(ms);
+  const days = Math.floor(
+    (startOfDay(new Date(now)) - startOfDay(then)) / 86_400_000,
+  );
+
+  if (days <= 0) {
+    return then.toLocaleTimeString(undefined, {
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  }
+  if (days < 7) return then.toLocaleDateString(undefined, { weekday: 'short' });
+  return then.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}

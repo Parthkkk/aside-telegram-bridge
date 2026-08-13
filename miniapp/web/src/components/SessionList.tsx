@@ -13,16 +13,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { SearchHit, SessionRow } from '../types';
 import { api } from '../api';
-import { relativeTime } from '../utils/time';
-import { ArrowDownUp, LayoutGrid, ListIcon, Search, Spinner } from './Icons';
-import { haptic } from '../telegram';
+import { dayBucket, listTime, relativeTime } from '../utils/time';
+import {
+  ArrowDownUp,
+  LayoutGrid,
+  ListIcon,
+  Search,
+  Spinner,
+  TrashIcon,
+} from './Icons';
+import { haptic, showConfirm } from '../telegram';
+import { readLocal, writeLocal } from '../utils/storage';
+import { SwipeToDelete } from './SwipeToDelete';
 
 const VIEW_KEY = 'miniapp.sessionView';
 
 export type SessionView = 'list' | 'card';
 
 export function readStoredView(): SessionView {
-  const stored = localStorage.getItem(VIEW_KEY);
+  const stored = readLocal(VIEW_KEY);
   return stored === 'card' ? 'card' : 'list';
 }
 
@@ -30,9 +39,41 @@ export interface SessionListProps {
   sessions: SessionRow[];
   onOpen: (id: string) => void;
   loading?: boolean;
+  /**
+   * Delete a chat. Absent means the list is read-only and no delete
+   * affordance is drawn at all -- a swipe that reveals a button which
+   * cannot work is worse than no swipe.
+   */
+  onDelete?: (id: string) => Promise<void>;
 }
 
-export function SessionList({ sessions, onOpen, loading }: SessionListProps) {
+/**
+ * Split an already-sorted list into its date bands, preserving order.
+ *
+ * Bands are emitted in the order the rows arrive rather than in a fixed
+ * Today-first order, so reversing the sort reverses the headings too and
+ * the list never claims "Today" above a row from March.
+ */
+export function groupByDay(
+  rows: SessionRow[],
+  now = Date.now(),
+): { label: string; rows: SessionRow[] }[] {
+  const groups: { label: string; rows: SessionRow[] }[] = [];
+  for (const row of rows) {
+    const label = dayBucket(row.updatedAt, now);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.rows.push(row);
+    else groups.push({ label, rows: [row] });
+  }
+  return groups;
+}
+
+export function SessionList({
+  sessions,
+  onOpen,
+  loading,
+  onDelete,
+}: SessionListProps) {
   const [view, setView] = useState<SessionView>(readStoredView);
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState('');
@@ -102,7 +143,7 @@ export function SessionList({ sessions, onOpen, loading }: SessionListProps) {
 
   const choose = (next: SessionView) => {
     setView(next);
-    localStorage.setItem(VIEW_KEY, next);
+    writeLocal(VIEW_KEY, next);
     haptic('select');
   };
 
@@ -110,6 +151,26 @@ export function SessionList({ sessions, onOpen, loading }: SessionListProps) {
     haptic('light');
     onOpen(id);
   };
+
+  /**
+   * Ask, then delete.
+   *
+   * Telegram's own confirm dialog rather than a webview one: it is the
+   * OS-level sheet, it cannot be missed behind the keyboard, and it is the
+   * same dialog the Stop control already uses. Deleting is the one action
+   * in this list with no undo inside the app, so it gets the interruption.
+   */
+  const remove = async (session: SessionRow) => {
+    if (!onDelete) return;
+    const ok = await showConfirm(`Delete “${session.title}”?`);
+    if (!ok) return;
+    haptic('medium');
+    await onDelete(session.id);
+  };
+
+  // Rows are already sorted by the memo above; grouping only inserts
+  // headings at the points where the band changes.
+  const groups = useMemo(() => groupByDay(visible), [visible]);
 
   return (
     <div className="session-area">
@@ -180,33 +241,53 @@ export function SessionList({ sessions, onOpen, loading }: SessionListProps) {
       ) : null}
 
       {view === 'list' ? (
-        <div className="session-rows">
-          {visible.map((session) => (
-            <button
-              key={session.id}
-              type="button"
-              className={`session-row${session.waiting ? ' is-waiting' : ''}`}
-              onClick={() => open(session.id)}
-            >
-              <span className="session-row-main">
-                <span className="session-row-title">
-                  {session.waiting ? (
-                    <span className="session-waiting-label">
-                      <span className="waiting-dot" />
-                      Waiting on you
-                    </span>
-                  ) : null}
-                  {session.title}
-                </span>
-                <span className="session-row-time">
-                  {relativeTime(session.updatedAt)}
-                </span>
-              </span>
-              <span className="session-row-marks">
-                {session.status === 'running' ? <Spinner size={13} /> : null}
-                {session.unread ? <span className="unread-dot" /> : null}
-              </span>
-            </button>
+        <div className="session-groups">
+          {groups.map((group) => (
+            <section className="session-group" key={group.label}>
+              <h3 className="session-group-head">{group.label}</h3>
+              <div className="session-rows">
+                {group.rows.map((session) => (
+                  <SwipeToDelete
+                    key={session.id}
+                    enabled={Boolean(onDelete)}
+                    label="Delete"
+                    icon={<TrashIcon size={17} strokeWidth={1.75} />}
+                    onDelete={() => remove(session)}
+                  >
+                    <button
+                      type="button"
+                      className={`session-row${
+                        session.waiting ? ' is-waiting' : ''
+                      }`}
+                      onClick={() => open(session.id)}
+                    >
+                      <span className="session-row-main">
+                        {session.waiting ? (
+                          <span className="session-waiting-label">
+                            <span className="waiting-dot" />
+                            Waiting on you
+                          </span>
+                        ) : null}
+                        <span className="session-row-title">
+                          {session.title}
+                        </span>
+                      </span>
+                      <span className="session-row-marks">
+                        {session.status === 'running' ? (
+                          <Spinner size={13} />
+                        ) : null}
+                        {session.unread ? (
+                          <span className="unread-dot" />
+                        ) : null}
+                        <span className="session-row-time">
+                          {listTime(session.updatedAt)}
+                        </span>
+                      </span>
+                    </button>
+                  </SwipeToDelete>
+                ))}
+              </div>
+            </section>
           ))}
         </div>
       ) : (

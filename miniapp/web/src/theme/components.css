@@ -57,7 +57,7 @@
   justify-content: flex-start;
   align-items: stretch;
   gap: 2px;
-  padding-top: max(24px, var(--shell-content-top, 0px));
+  padding-top: max(24px, var(--tg-chrome-top, var(--shell-content-top, 0px)));
 }
 
 .boot-skeleton-row {
@@ -117,14 +117,24 @@
 .composer {
   background: var(--surface-primary);
   border: var(--hairline) solid var(--border-surface);
-  border-radius: 28px;
+  border-radius: var(--radius-composer);
   padding: 16px 12px 12px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /*
+   * Three layers, and the middle one is what sells "floating".
+   *
+   * A single tight shadow reads as a raised border. A contact shadow (1px,
+   * almost black) plus a mid shadow plus a wide soft one is how a real
+   * object sits above a surface: sharp where it touches, diffuse further
+   * out. The wide layer is deliberately large and very low alpha -- it is
+   * felt rather than seen, and at higher alpha it turns into a grey halo.
+   */
   box-shadow:
-    0 1px 2px oklch(14.5% 0 0 / 0.04),
-    0 10px 28px -10px oklch(14.5% 0 0 / 0.12);
+    0 1px 2px oklch(14.5% 0 0 / 0.05),
+    0 6px 16px -6px oklch(14.5% 0 0 / 0.1),
+    0 22px 48px -20px oklch(14.5% 0 0 / 0.16);
 }
 
 .composer .composer-input {
@@ -201,7 +211,7 @@
 .round-button {
   width: 34px;
   height: 34px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   display: grid;
   place-items: center;
   flex: none;
@@ -249,7 +259,7 @@
   gap: 4px;
   height: 30px;
   padding: 0 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   color: var(--accent-foreground);
   font-size: var(--text-sm);
   white-space: nowrap;
@@ -311,7 +321,7 @@
   padding: 3px;
   gap: 2px;
   background: var(--muted);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
 }
 
 .segmented button {
@@ -320,7 +330,7 @@
   gap: 6px;
   height: 32px;
   padding: 0 14px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   font-size: var(--text-sm);
   font-weight: var(--font-weight-medium);
   color: var(--secondary-foreground);
@@ -411,21 +421,30 @@
   overflow: hidden;
 }
 
-/* Square corners: a radius here would curve the separator's ends and
-   make each row read as an outlined card. */
+/*
+ * A history row.
+ *
+ * Reworked from a two-line row (title over "3 days ago") to a single line
+ * with the stamp trailing. Two reasons, both about scanning: the second
+ * line doubled the height of every row so a phone showed eight chats
+ * instead of fourteen, and the relative time it carried is now mostly
+ * redundant with the group heading above it.
+ *
+ * Square corners, no separators. The old hairline under every row drew
+ * fourteen horizontal lines down a screen whose only real structure is the
+ * group headings; whitespace and the headings carry it instead, which is
+ * what makes the list look composed rather than tabulated.
+ */
 .session-row {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 13px 10px;
+  padding: 11px 10px;
+  border-radius: var(--radius-lg);
   text-align: left;
-  border-bottom: var(--hairline) solid var(--border);
-  transition: background var(--duration) var(--ease-out);
-}
-
-.session-row:last-child {
-  border-bottom: none;
+  background: var(--page);
+  transition: background 0.18s var(--ease-out);
 }
 
 .session-row:active {
@@ -436,13 +455,14 @@
   flex: 1;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 8px;
 }
 
 .session-row-title {
-  font-size: var(--text-base);
-  font-weight: var(--font-weight-medium);
+  min-width: 0;
+  font-size: 0.95rem;
+  font-weight: var(--font-weight-normal);
   letter-spacing: -0.011em;
   color: var(--foreground);
   overflow: hidden;
@@ -452,7 +472,9 @@
 
 .session-row-time {
   font-size: var(--text-xs);
-  color: var(--muted-foreground);
+  color: var(--surface-tertiary-foreground);
+  font-variant-numeric: tabular-nums;
+  flex: none;
 }
 
 .session-row-marks {
@@ -465,7 +487,7 @@
 .unread-dot {
   width: 8px;
   height: 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--brand);
   flex: none;
 }
@@ -474,7 +496,7 @@
 .waiting-dot {
   width: 8px;
   height: 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--state-waiting);
   flex: none;
 }
@@ -567,7 +589,7 @@
   padding: 6px 8px;
   /* Fullscreen mode lands the header under the status bar / Telegram's own
      floating chrome without this -- see telegram.ts `bindSafeAreaVars`. */
-  padding-top: calc(6px + var(--shell-content-top, 0px));
+  padding-top: calc(6px + var(--tg-chrome-top, var(--shell-content-top, 0px)));
   border-bottom: var(--hairline) solid var(--border);
   background: var(--background);
   flex: none;
@@ -589,32 +611,114 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px 14px 20px;
+  padding: 14px 16px 0;
   background: var(--background);
+  /*
+   * Run UNDERNEATH the composer.
+   *
+   * The negative margin extends this box down through the dock's own
+   * space, so the transcript keeps going behind the card instead of
+   * stopping at its top edge. That overlap is what the scrim is for --
+   * blurring a strip of empty page is just a different shade of empty
+   * page, which is exactly how the old version looked.
+   *
+   * The padding then gives the content back the room it needs to be
+   * scrolled clear of the card, plus 22px of breathing space, so the last
+   * line of an answer can still be read in full.
+   *
+   * `--dock-h` is measured live (see `useDockHeight`) because the dock
+   * grows: a multi-line draft, the task list, a blocked-session banner.
+   * The fallback only has to be sane for the single frame before the
+   * first measurement lands.
+   */
+  margin-bottom: calc(-1 * var(--dock-h, 104px));
+  padding-bottom: calc(var(--dock-h, 104px) + 22px);
+  /* iOS overlays its own; a persistent track next to the scrim is just a
+     hard vertical line through the effect. */
+  scrollbar-width: none;
+}
+
+.thread-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .thread {
   display: flex;
   flex-direction: column;
-  gap: 18px;
 }
 
-/* User turns: a light grey bubble, right-aligned block, never blue. */
+/*
+ * Turn rhythm.
+ *
+ * The old flat `gap: 18px` spaced a user bubble from its answer exactly as
+ * far as it spaced one exchange from the next, so the thread read as a
+ * uniform stack of unrelated blocks -- the "disorganized" complaint. A
+ * question and its answer belong together; the next question is a new
+ * thing. So the gaps differ by a factor of two and the eye gets the
+ * grouping for free.
+ *
+ * Applied as margins on the virtualized rows rather than as a flex gap,
+ * because the virtualizer absolutely-positions each row and a gap on the
+ * container never reaches them.
+ */
+.thread > div > .turn-user {
+  margin-top: 26px;
+}
+
+.thread > div:first-child > .turn-user {
+  margin-top: 0;
+}
+
+/*
+ * A turn is now the bubble (or the answer) plus its action row, so the
+ * two move together and the actions cannot end up orphaned against the
+ * wrong edge.
+ */
+.turn-user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.turn-answer {
+  margin-top: 14px;
+}
+
+/*
+ * User turns: a soft bubble, right-aligned, never blue.
+ *
+ * Narrower than it was (88% -> 78%). At 88% a long paragraph spans nearly
+ * the full column and stops reading as "the thing I said" -- the asymmetry
+ * IS the speaker label here, since there are no avatars, and it needs
+ * enough left margin to register.
+ */
 .user-bubble {
   align-self: flex-end;
-  max-width: 88%;
-  padding: 12px 14px;
+  margin-left: auto;
+  width: fit-content;
+  max-width: 78%;
+  padding: 11px 15px;
   background: var(--muted);
-  border-radius: var(--radius-2xl);
+  /* Squircle-ish, matching the composer above it. */
+  border-radius: var(--radius-xl);
   font-size: var(--text-base);
-  line-height: var(--leading-relaxed);
+  line-height: 1.5;
+  letter-spacing: -0.006em;
   white-space: pre-wrap;
   word-break: break-word;
+  animation: turn-in 0.34s var(--ease-emphasized) both;
+}
+
+/* Sent but not yet confirmed by the transcript. */
+.user-bubble.is-pending {
+  opacity: 0.55;
 }
 
 /* The answer is plain page content -- no bubble, no card. */
 .answer {
   font-size: var(--text-base);
+  animation: turn-in 0.34s var(--ease-emphasized) both;
 }
 
 .system-error {
@@ -771,7 +875,7 @@
 .badge {
   flex: none;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--muted);
   color: var(--secondary-foreground);
   font-size: var(--text-xs);
@@ -832,26 +936,202 @@
 /* Same treatment as the home dock: the composer floats, it is not welded
    to a bordered bar. */
 .thread-footer {
+  position: relative;
   flex: none;
   z-index: 2;
-  padding: 6px 12px calc(10px + max(env(safe-area-inset-bottom), var(--shell-safe-bottom, 0px)));
+  /*
+   * Wider side margins than before. The card used to sit almost flush to
+   * the screen edge, which is what stopped it reading as a floating object
+   * -- something inset by 4px is a bar with a rounded top, not a card.
+   */
+  padding: 6px 16px calc(12px + max(env(safe-area-inset-bottom), var(--shell-safe-bottom, 0px)));
   display: flex;
   flex-direction: column;
   gap: 6px;
-  background: var(--page);
-  background: linear-gradient(
-    to top,
-    var(--page) 58%,
-    color-mix(in oklab, var(--page) 55%, transparent) 82%,
-    color-mix(in oklab, var(--page) 0%, transparent) 100%
-  );
+  /*
+   * No background of its own. It used to carry a page-coloured gradient
+   * AND sit under a separately-masked blur strip, and the two ramps met
+   * head-on at this element's top edge -- one arriving at full strength,
+   * the other starting at zero. That collision is the horizontal seam
+   * across the page. There is now exactly one ramp, on `::before` below.
+   */
+  background: transparent;
 }
 
-/* Webviews without backdrop-filter get an opaque bar rather than a
-   translucent one that renders as muddy. */
-@supports not (backdrop-filter: blur(1px)) {
-  .thread-footer {
-    background: var(--background);
+/*
+ * Everything except the scrim rides above it.
+ *
+ * The scrim is a pseudo-element, so it paints behind this element's own
+ * children by default -- but only once those children establish a
+ * position. Without this the composer is painted first and the scrim goes
+ * over the top of it.
+ */
+.thread-footer > *,
+.home-dock > * {
+  position: relative;
+  z-index: 1;
+}
+
+/*
+ * The dock overlaps the scroller now, so its empty margins must not eat
+ * scroll gestures. Only the real controls are hit-testable; a drag that
+ * starts on the page beside the card still scrolls the conversation.
+ */
+.thread-footer,
+.home-dock {
+  pointer-events: none;
+}
+
+.thread-footer > *,
+.home-dock > * {
+  pointer-events: auto;
+}
+
+/*
+ * The dissolve, where the conversation meets the composer.
+ *
+ * ONE element, spanning the fade zone AND the whole footer, so there is a
+ * single continuous ramp and therefore nowhere for a seam to form. It
+ * carries two things, both governed by the same mask:
+ *
+ *  - `backdrop-filter`, which blurs the conversation scrolling underneath;
+ *  - a page-coloured background gradient, which is what actually hides it.
+ *
+ * The mask multiplies both. That is the whole reason this works: blur and
+ * tint arrive together and leave together, so text goes SOFT before it
+ * goes away instead of staying sharp until it abruptly stops.
+ *
+ * The background gradient has to reach full `--page` at the bottom, and it
+ * has to be a gradient rather than a flat fill -- an opaque background
+ * composites OVER the blurred backdrop and hides the blur entirely, which
+ * is the trap here.
+ */
+.thread-footer::before,
+.home-dock::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* The footer's own height, plus the runway above it to fade over. */
+  height: calc(100% + 124px);
+  pointer-events: none;
+  z-index: 0;
+  backdrop-filter: blur(11px);
+  -webkit-backdrop-filter: blur(11px);
+  /*
+   * Stops in PIXELS, not percentages, and that is the fix for the fade
+   * being too abrupt.
+   *
+   * Percentages resolve against the whole element -- runway PLUS the
+   * footer's own height -- so a stop at 60% landed well below the card's
+   * top edge, which meant most of the ramp happened where the card was
+   * already covering it. All the reader saw was the last ~20% of the
+   * curve compressed into one line of text. Pixels pin the ramp to the
+   * 124px runway, where it is actually visible.
+   */
+  background: linear-gradient(
+    to bottom,
+    color-mix(in oklab, var(--page) 0%, transparent) 0px,
+    color-mix(in oklab, var(--page) 22%, transparent) 62px,
+    color-mix(in oklab, var(--page) 72%, transparent) 98px,
+    var(--page) 128px
+  );
+  /*
+   * Two mask layers, intersected.
+   *
+   * VERTICAL is the dissolve, weighted toward the bottom: a linear ramp
+   * softens text nowhere near the composer, so this leaves the top third
+   * almost untouched and does its work in the last half.
+   *
+   * HORIZONTAL is the part that stops this reading as a solid bar. The
+   * scrim relaxes over the last ~26px at each edge, so the conversation
+   * stays faintly legible in the margins either side of the card. That
+   * narrow strip of surviving text is what tells the eye the composer is
+   * a thing FLOATING ON the page rather than a panel welded across it.
+   */
+  mask-image: var(--scrim-mask);
+  mask-composite: intersect;
+  -webkit-mask-image: var(--scrim-mask);
+  -webkit-mask-composite: source-in;
+}
+
+/*
+ * The two mask layers, declared once.
+ *
+ * VERTICAL is the dissolve, spread across the full 124px runway so the
+ * softening starts a couple of lines before the card rather than in the
+ * last one.
+ *
+ * HORIZONTAL is what stops this reading as a solid curtain. The scrim
+ * relaxes to 38% over the outer 44px at each edge, so the conversation
+ * stays faintly legible in the margins beside the card. That surviving
+ * sliver is what tells the eye the composer is floating ON the page
+ * rather than welded across it -- a full-width scrim hides everything
+ * uniformly, which is precisely what makes it look like a bar.
+ */
+:root {
+  --scrim-mask:
+    linear-gradient(
+      to bottom,
+      transparent 0px,
+      oklch(0% 0 0 / 0.05) 34px,
+      oklch(0% 0 0 / 0.3) 70px,
+      oklch(0% 0 0 / 0.74) 100px,
+      oklch(0% 0 0 / 0.98) 124px,
+      oklch(0% 0 0 / 1) 100%
+    ),
+    linear-gradient(
+      to right,
+      oklch(0% 0 0 / 0.38) 0,
+      oklch(0% 0 0 / 1) 44px,
+      oklch(0% 0 0 / 1) calc(100% - 44px),
+      oklch(0% 0 0 / 0.38) 100%
+    );
+}
+
+/*
+ * Where `mask-composite` is missing, fall back to the vertical ramp alone.
+ *
+ * Without the intersect the two layers ADD instead, which produces a fully
+ * opaque scrim -- strictly worse than just dropping the edge falloff.
+ */
+@supports not ((mask-composite: intersect) or (-webkit-mask-composite: source-in)) {
+  .thread-footer::before,
+  .home-dock::before {
+    mask-image: linear-gradient(
+      to bottom,
+      transparent 0px,
+      oklch(0% 0 0 / 0.05) 34px,
+      oklch(0% 0 0 / 0.3) 70px,
+      oklch(0% 0 0 / 0.74) 100px,
+      oklch(0% 0 0 / 0.98) 124px,
+      oklch(0% 0 0 / 1) 100%
+    );
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      transparent 0px,
+      oklch(0% 0 0 / 0.05) 34px,
+      oklch(0% 0 0 / 0.3) 70px,
+      oklch(0% 0 0 / 0.74) 100px,
+      oklch(0% 0 0 / 0.98) 124px,
+      oklch(0% 0 0 / 1) 100%
+    );
+  }
+}
+
+/*
+ * Webviews without backdrop-filter get the opaque bar and no scrim.
+ *
+ * The fallback is deliberately "nothing" rather than "a stronger opacity
+ * gradient": without the blur there is no dissolve to approximate, and a
+ * heavier fade just clips the conversation earlier.
+ */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .thread-footer::before,
+  .home-dock::before {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }
 
@@ -885,7 +1165,7 @@
 .permission-dot {
   width: 7px;
   height: 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: currentColor;
   flex: none;
 }
@@ -1233,7 +1513,8 @@
   gap: 6px;
   max-width: 100%;
   padding: 4px 4px 4px 5px;
-  border-radius: var(--radius-lg);
+  /* Concentric inside the composer: 26px outer, 12px padding. */
+  border-radius: var(--radius-inset);
   background: var(--muted);
   font-size: var(--text-sm);
   color: var(--secondary-foreground);
@@ -1276,7 +1557,7 @@
   place-items: center;
   width: 20px;
   height: 20px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   color: inherit;
   opacity: 0.6;
   flex: none;
@@ -1300,7 +1581,7 @@
   align-items: center;
   gap: 4px;
   padding: 2px 7px 2px 5px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--surface-secondary);
   font-size: var(--text-xs);
   color: var(--secondary-foreground);
@@ -1373,7 +1654,7 @@
   position: relative;
   width: 38px;
   height: 22px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--muted);
   flex: none;
   transition: background var(--duration) var(--ease-out);
@@ -1389,7 +1670,7 @@
   left: 2px;
   width: 18px;
   height: 18px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: #fff;
   box-shadow: 0 1px 2px oklch(0% 0 0 / 0.25);
   transition: transform var(--duration) var(--ease-out);
@@ -1958,7 +2239,7 @@
   top: 0.55em;
   width: 5px;
   height: 5px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--surface-tertiary-foreground);
 }
 
@@ -2137,189 +2418,6 @@
   white-space: pre-wrap;
 }
 
-/* --- question card ------------------------------------------------------- */
-
-/*
- * Where a raw JSON blob and a misleading "Success" badge used to be. The
- * card is deliberately prominent -- a pending question is the one thing on
- * screen that the reader has to act on.
- */
-.question-card {
-  border: var(--hairline) solid var(--border-surface-strong);
-  background: var(--surface-primary);
-  border-radius: var(--radius-2xl);
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.question-card.is-readonly,
-.question-card.is-settled {
-  background: color-mix(in oklab, var(--muted) 45%, transparent);
-  border-color: var(--border);
-}
-
-.question-block {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.question-header {
-  font-size: var(--text-xs);
-  font-weight: var(--font-weight-medium);
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: var(--muted-foreground);
-}
-
-.question-text {
-  font-size: var(--text-sm);
-  line-height: var(--leading-snug);
-  color: var(--foreground);
-}
-
-.question-options {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 2px;
-}
-
-.question-option {
-  text-align: left;
-  border: var(--hairline) solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--background);
-  padding: 9px 11px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  transition: background var(--duration) var(--ease-out);
-}
-
-.question-option:active:not(:disabled) {
-  background: var(--muted);
-}
-
-.question-option:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-
-.question-option.is-chosen {
-  border-color: var(--foreground);
-  opacity: 1;
-}
-
-.question-option-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--text-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--foreground);
-}
-
-.question-option-description {
-  font-size: var(--text-xs);
-  line-height: var(--leading-snug);
-  color: var(--muted-foreground);
-}
-
-.question-artifact {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 9px 11px;
-  border-radius: var(--radius-lg);
-  background: var(--muted);
-  font-size: var(--text-xs);
-}
-
-.question-artifact-row {
-  display: flex;
-  gap: 8px;
-}
-
-.question-artifact-row dt {
-  flex: none;
-  min-width: 74px;
-  color: var(--muted-foreground);
-}
-
-.question-artifact-row dd {
-  min-width: 0;
-  color: var(--foreground);
-  overflow-wrap: anywhere;
-}
-
-.question-reply {
-  display: flex;
-  gap: 6px;
-}
-
-.question-reply input {
-  flex: 1;
-  min-width: 0;
-  border: var(--hairline) solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--background);
-  padding: 8px 10px;
-  font: inherit;
-  font-size: var(--text-sm);
-  color: var(--foreground);
-}
-
-.question-reply button {
-  flex: none;
-  padding: 0 12px;
-  border-radius: var(--radius-lg);
-  background: var(--primary);
-  color: var(--primary-foreground);
-  font-size: var(--text-sm);
-}
-
-.question-reply button:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.question-answered {
-  font-size: var(--text-sm);
-  line-height: var(--leading-snug);
-  color: var(--muted-foreground);
-  white-space: pre-wrap;
-}
-
-/*
- * A native pending tool can only be answered from the desktop sidepanel,
- * so the card says so rather than offering a control that cannot work --
- * and then offers the one control that CAN work: carrying on in a new
- * session seeded with the question and the chosen answer.
- */
-.question-notice {
-  font-size: var(--text-xs);
-  line-height: var(--leading-snug);
-  color: var(--permission);
-}
-
-.question-recover {
-  width: 100%;
-  padding: 9px 12px;
-  border: var(--hairline) solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--background);
-  color: var(--foreground);
-  font-size: var(--text-sm);
-  font-weight: 500;
-}
-
-.question-recover:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
 
 /* --- task list ----------------------------------------------------------- */
 
@@ -2430,11 +2528,22 @@
  * question only the desktop app can answer. Saying so beats accepting a
  * message that would queue a turn which never returns.
  */
+.composer-blocked-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 4px;
+}
+
 .composer-blocked {
   font-size: var(--text-xs);
   line-height: var(--leading-snug);
   color: var(--permission);
-  padding: 2px 2px 4px;
+  padding: 2px 2px 0;
+}
+
+.composer-blocked-block .question-recover {
+  padding: 8px 12px;
 }
 
 .composer-input:disabled {
@@ -2863,6 +2972,14 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /*
+   * Same overlap as the thread: Recents genuinely passes under the docked
+   * composer instead of stopping at its top edge. The two panels below
+   * each reserve the dock's height back out of their own padding, so the
+   * hero stays optically centred and the last chat row still clears the
+   * card.
+   */
+  margin-bottom: calc(-1 * var(--dock-h, 104px));
   /* `proximity`, not `mandatory`: a half-swipe to peek at Recents should
      stay where it was put rather than being snapped back or thrown. */
   scroll-snap-type: y proximity;
@@ -2885,7 +3002,14 @@
   flex-direction: column;
   align-items: center;
   padding: 10px 20px 6px;
-  padding-top: calc(10px + var(--shell-content-top, 0px));
+  padding-top: calc(10px + var(--tg-chrome-top, var(--shell-content-top, 0px)));
+  /*
+   * Reserves the dock's space back. `min-height: 100%` now resolves
+   * against a scroller that is `--dock-h` taller than the screen, so
+   * without this the greeting centres itself against that taller box and
+   * drifts down behind the composer.
+   */
+  padding-bottom: calc(6px + var(--dock-h, 104px));
 }
 
 /* Icon-only, right-aligned. Anything more competes with the greeting. */
@@ -2905,7 +3029,7 @@
   font-weight: var(--font-weight-semibold);
   color: var(--color-white);
   background: var(--state-waiting);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   min-width: 18px;
   height: 18px;
   padding: 0 5px;
@@ -2957,7 +3081,7 @@
      read as part of the input rather than as the top of the history. */
   margin-bottom: 14px;
   padding: 7px 13px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   color: var(--muted-foreground);
   font-size: var(--text-xs);
   letter-spacing: 0.02em;
@@ -2995,6 +3119,9 @@
      with the top of the scroller, so without it the heading sits on the
      edge with nothing above it. */
   padding: 18px 12px 24px;
+  /* Clears the dock, so the last chat in the list can be scrolled out
+     from under the composer rather than being permanently half-hidden. */
+  padding-bottom: calc(24px + var(--dock-h, 104px));
 }
 
 .home-history-head {
@@ -3008,19 +3135,13 @@
 }
 
 .home-dock {
+  position: relative;
   flex: none;
   z-index: 2;
-  padding: 6px 12px calc(10px + max(env(safe-area-inset-bottom), var(--shell-safe-bottom, 0px)));
-  /* Solid fallback first; the gradient below replaces it where supported.
-     Fading to `transparent` directly would ghost grey on the way out, so
-     the last stop is the page colour at zero alpha instead. */
-  background: var(--page);
-  background: linear-gradient(
-    to top,
-    var(--page) 58%,
-    color-mix(in oklab, var(--page) 55%, transparent) 82%,
-    color-mix(in oklab, var(--page) 0%, transparent) 100%
-  );
+  padding: 6px 16px calc(12px + max(env(safe-area-inset-bottom), var(--shell-safe-bottom, 0px)));
+  /* Same reasoning as `.thread-footer`: the single scrim on `::before`
+     owns the whole fade, so this element must not paint a second one. */
+  background: transparent;
 }
 
 
@@ -3088,7 +3209,7 @@
   justify-content: center;
   width: 34px;
   height: 34px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--muted);
   color: var(--surface-secondary-foreground);
 }
@@ -3188,7 +3309,7 @@
   position: absolute;
   inset: 1px;
   border: 1.6px solid currentColor;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
 }
 .sheet-dot-glyph::after {
   content: '';
@@ -3215,4 +3336,1371 @@
 /* The sheet's own page tint, so the white cards read as raised. */
 .sheet-bottom .sheet-body {
   background: var(--page);
+}
+
+
+/* =========================================================================
+ * Polish pass: grouped history, swipe-to-delete, and the motion system.
+ * ========================================================================= */
+
+/* --- grouped history ----------------------------------------------------- */
+
+.session-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.session-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/*
+ * The band heading: "Today", "Previous 7 days".
+ *
+ * Small, uppercase-ish tracking, low contrast. It is a signpost, not
+ * content -- if it competes with the chat titles for attention it has
+ * made the list harder to read rather than easier, which is the usual
+ * failure of section headings at body weight.
+ */
+.session-group-head {
+  margin: 0;
+  padding: 0 10px 5px;
+  font-size: 0.7rem;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+  color: var(--surface-tertiary-foreground);
+}
+
+/* --- swipe to delete ----------------------------------------------------- */
+
+.swipe-row {
+  position: relative;
+  border-radius: var(--radius-lg);
+  /* The action lives behind the surface; without this it slides out past
+     the row's rounded corners on the right. */
+  overflow: hidden;
+}
+
+/*
+ * The action sits UNDER the row and does not move.
+ *
+ * Anchored to the right edge at a fixed width, so the swipe reveals it by
+ * sliding the surface off rather than by animating the button in. That is
+ * the difference between the action feeling like it was always there and
+ * feeling like it was summoned.
+ */
+.swipe-action {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 88px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-medium);
+  transition: filter 0.12s var(--ease-out);
+}
+
+.swipe-action:active {
+  filter: brightness(0.88);
+}
+
+.swipe-action-label {
+  letter-spacing: -0.005em;
+}
+
+/*
+ * The row itself, riding above the action.
+ *
+ * `will-change` is load-bearing rather than cargo-culted: the transform is
+ * driven from touchmove at frame rate, and without the promotion to its own
+ * layer the row repaints on the main thread and the drag visibly lags the
+ * thumb on a mid-range phone.
+ */
+.swipe-surface {
+  position: relative;
+  z-index: 1;
+  background: var(--page);
+  will-change: transform;
+  touch-action: pan-y;
+}
+
+/* --- motion system ------------------------------------------------------- */
+
+/*
+ * Two curves, used everywhere, and nothing else.
+ *
+ * `--ease-emphasized` overshoots slightly and settles: things that ENTER
+ * use it, because arriving with a little momentum reads as physical.
+ * `--ease-exit` is a pure decelerate with no overshoot: things that LEAVE
+ * should not bounce on the way out, which looks indecisive.
+ *
+ * The durations are short on purpose. Premium motion is not slow motion --
+ * anything past ~350ms on a phone is something the user is waiting for.
+ */
+:root {
+  --ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --duration-fast: 0.14s;
+  --duration-base: 0.24s;
+  --duration-slow: 0.34s;
+}
+
+/*
+ * A new turn arriving.
+ *
+ * 8px of travel, not 20. A large rise on a message that is REPLACING a
+ * streaming block (they swap when the transcript settles) reads as the
+ * answer jumping, because the reader was already looking at the text.
+ */
+@keyframes turn-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * Press feedback on every control.
+ *
+ * A tiny scale-down on touch, and it is the single cheapest thing that
+ * separates "web page in a webview" from "app": a button that does not
+ * acknowledge the finger before the network does feels broken even when
+ * it is working.
+ *
+ * `:active` rather than a JS press state, so it cannot get stuck on if a
+ * touch is cancelled by a scroll.
+ */
+.round-button,
+.icon-button,
+.pill,
+.question-option,
+.segmented button,
+.rest-cue {
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out),
+    opacity var(--duration-fast) var(--ease-out);
+}
+
+.round-button:active:not(:disabled),
+.icon-button:active,
+.pill:active,
+.question-option:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+/*
+ * Send is the one control that gets a bigger reaction.
+ *
+ * It is the only irreversible tap in the composer, so it is the only one
+ * worth a stronger confirmation. It also fades in rather than appearing:
+ * `:disabled` -> enabled happens the instant the first character lands,
+ * and a hard pop there is distracting while typing.
+ */
+.round-button.send {
+  transition:
+    background var(--duration-base) var(--ease-out),
+    opacity var(--duration-base) var(--ease-out),
+    transform var(--duration-fast) var(--ease-emphasized);
+}
+
+.round-button.send:active:not(:disabled) {
+  transform: scale(0.9);
+}
+
+/* --- composer focus ------------------------------------------------------ */
+
+/*
+ * The composer lifts when the keyboard is up.
+ *
+ * `:focus-within` on the card, so the shadow deepens and the border firms
+ * while typing and relaxes when done. It is almost subliminal, which is
+ * the point: it makes the composer the active object on screen without
+ * drawing a focus ring around it.
+ */
+.composer {
+  transition:
+    box-shadow var(--duration-slow) var(--ease-out),
+    border-color var(--duration-slow) var(--ease-out);
+}
+
+.composer:focus-within {
+  border-color: var(--border-surface-strong);
+  box-shadow:
+    0 1px 2px oklch(14.5% 0 0 / 0.06),
+    0 8px 20px -6px oklch(14.5% 0 0 / 0.12),
+    0 28px 56px -22px oklch(14.5% 0 0 / 0.22);
+}
+
+.dark .composer:focus-within {
+  box-shadow:
+    0 1px 2px oklch(0% 0 0 / 0.35),
+    0 16px 40px -14px oklch(0% 0 0 / 0.55);
+}
+
+/* --- question card ------------------------------------------------------- */
+
+/*
+ * A question is the one thing in a thread that is WAITING on the reader,
+ * so it is the one thing allowed to announce itself: a full-width card on
+ * white, lifted off the page, with a hairline in the waiting colour down
+ * its leading edge.
+ *
+ * It is not tinted amber all over. A wash across the whole card makes the
+ * question text harder to read, and the card is already the only white
+ * rectangle in a thread of bare text -- it does not need help being found.
+ */
+.question-card {
+  position: relative;
+  margin-top: 16px;
+  padding: 16px 16px 14px;
+  /*
+   * Same radius as the composer: both are cards floating on the page, and
+   * two floating cards on one screen with different corner treatments is
+   * the kind of inconsistency that registers as "cheap" without anyone
+   * being able to point at it.
+   */
+  border-radius: var(--radius-3xl);
+  background: var(--surface-primary);
+  border: var(--hairline) solid var(--border-surface);
+  box-shadow:
+    0 1px 2px oklch(14.5% 0 0 / 0.03),
+    0 12px 32px -14px oklch(14.5% 0 0 / 0.14);
+  animation: turn-in var(--duration-slow) var(--ease-emphasized) both;
+  overflow: hidden;
+}
+
+.question-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--state-waiting);
+}
+
+/* Answered: the card stays as the record, but stops shouting. */
+.question-card.is-settled {
+  box-shadow: none;
+  background: var(--muted);
+  border-color: transparent;
+}
+
+.question-card.is-settled::before {
+  background: var(--border);
+}
+
+.question-block + .question-block {
+  margin-top: 14px;
+}
+
+.question-header {
+  margin: 0 0 3px;
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--state-waiting);
+}
+
+.question-card.is-settled .question-header {
+  color: var(--surface-tertiary-foreground);
+}
+
+.question-text {
+  margin: 0 0 12px;
+  font-size: var(--text-base);
+  line-height: 1.45;
+  letter-spacing: -0.008em;
+  color: var(--foreground);
+}
+
+.question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+/*
+ * An option.
+ *
+ * Full-width rows rather than a wrapped row of chips. Options carry
+ * descriptions, chips cannot, and a two-line chip that wraps mid-row is
+ * the ugliest thing a card like this can do.
+ */
+.question-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 11px 13px;
+  /*
+   * Concentric with the card: 26px outer minus its 16px padding is 10px.
+   * Not a taste call -- an option nested at 16px with an 18px radius has
+   * corners that visibly diverge from the card's, and the eye reads the
+   * pair as two unrelated shapes rather than one seated inside the other.
+   */
+  border-radius: var(--radius-md);
+  border: var(--hairline) solid var(--border);
+  background: var(--page);
+  text-align: left;
+}
+
+.question-option:active:not(:disabled) {
+  background: var(--muted);
+}
+
+.question-option.is-chosen {
+  border-color: transparent;
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.question-option:disabled {
+  opacity: 0.5;
+}
+
+/* A chosen option keeps full contrast while the rest dim out. */
+.question-option.is-chosen:disabled {
+  opacity: 1;
+}
+
+.question-option-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: -0.006em;
+}
+
+.question-option-description {
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--muted-foreground);
+}
+
+.question-option.is-chosen .question-option-description {
+  color: color-mix(in oklab, var(--primary-foreground) 70%, transparent);
+}
+
+/*
+ * The free-text reply.
+ *
+ * Sits below the options because it is the fallback, not the primary
+ * path -- but it is always there, because the honest answer to a
+ * two-option question is frequently neither of them.
+ */
+.question-reply {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: var(--hairline) solid var(--border);
+}
+
+.question-reply input {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  padding: 0 13px;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  font-size: var(--text-sm);
+  color: var(--foreground);
+}
+
+.question-reply input::placeholder {
+  color: var(--surface-tertiary-foreground);
+}
+
+.question-reply button {
+  flex: none;
+  height: 38px;
+  padding: 0 15px;
+  border-radius: var(--radius-full);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+  transition:
+    opacity var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.question-reply button:disabled {
+  opacity: 0.35;
+}
+
+.question-reply button:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.question-notice,
+.question-answered {
+  margin: 12px 0 0;
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  color: var(--muted-foreground);
+}
+
+.question-answered {
+  font-weight: var(--font-weight-medium);
+  color: var(--foreground);
+}
+
+.question-artifact {
+  margin: 12px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.question-artifact-row {
+  display: flex;
+  gap: 10px;
+  font-size: var(--text-xs);
+}
+
+.question-artifact-row dt {
+  flex: none;
+  min-width: 78px;
+  color: var(--muted-foreground);
+}
+
+.question-artifact-row dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--foreground);
+  word-break: break-word;
+}
+
+.question-recover {
+  width: 100%;
+  margin-top: 12px;
+  height: 40px;
+  border-radius: var(--radius-xl);
+  background: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--foreground);
+  display: grid;
+  place-items: center;
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.question-recover:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* --- reduced motion ------------------------------------------------------ */
+
+/*
+ * Everything above degrades to no animation, not to a shorter one.
+ *
+ * A user who has asked the OS for reduced motion has asked for no
+ * vestibular surprises; a 60ms version of the same slide is still a slide.
+ * Press-scale is kept, because it is feedback rather than decoration and
+ * it does not move anything the eye is reading.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .user-bubble,
+  .answer,
+  .question-card,
+  .message-actions {
+    animation: none;
+  }
+
+  .swipe-surface {
+    transition: none !important;
+  }
+
+  .rest-cue svg {
+    animation: none;
+  }
+}
+
+
+/* --- message actions ----------------------------------------------------- */
+
+/*
+ * The copy row under a message.
+ *
+ * Low contrast and small on purpose. It has to be findable without ever
+ * competing with the message it belongs to -- a full-contrast button under
+ * every turn turns a conversation into a form. Claude's own row does the
+ * same thing: the icons are barely darker than the page until you go
+ * looking for them.
+ *
+ * The negative top margin pulls it into the text's own line-height
+ * whitespace, so the row costs about 8px of real estate rather than 28.
+ */
+/*
+ * Revealed by a press and hold, never permanently on screen.
+ *
+ * `height: 0` in the closed state is not needed -- the row is unmounted
+ * rather than hidden -- so this is purely the entrance. It rises from
+ * under the message it belongs to, which is the direction that reads as
+ * "this came out of that".
+ */
+.message-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: -2px;
+  /* Cancels the answer's left text edge so the icon aligns with the first
+     character above it rather than with the button's padding box. */
+  margin-left: -7px;
+  animation: actions-in 0.2s var(--ease-emphasized) both;
+}
+
+@keyframes actions-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -5px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * The hold target.
+ *
+ * `-webkit-touch-callout: none` is the load-bearing line. Without it, iOS
+ * answers a long press on text with its own selection callout, which fires
+ * at roughly the same moment as this gesture and wins -- so the user gets
+ * the OS menu, our row, or an ugly race between them depending on where
+ * their finger landed.
+ *
+ * `user-select: none` follows from that decision rather than being a
+ * separate one: with the callout suppressed, a half-started native
+ * selection can still leave text highlighted under the revealed row, which
+ * looks like a rendering bug. The cost is real -- you can no longer drag
+ * to select one paragraph of an answer -- but the copy button copies the
+ * whole message cleanly, which is what the gesture is for.
+ */
+.press-reveal {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/*
+ * Code blocks opt back in.
+ *
+ * Selecting part of a command or a snippet is a real need that copying the
+ * entire message does not serve, and a code block already has its own copy
+ * affordance, so there is nothing here for the hold to win.
+ */
+.press-reveal pre,
+.press-reveal code {
+  -webkit-touch-callout: default;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* The held message dips very slightly while its actions are open, so it is
+   obvious WHICH message the row belongs to in a dense thread. */
+.press-reveal.is-open .user-bubble,
+.press-reveal.is-open .answer {
+  transition: opacity var(--duration-base) var(--ease-out);
+  opacity: 0.82;
+}
+
+.message-actions.is-end {
+  justify-content: flex-end;
+  margin-left: 0;
+  margin-right: -7px;
+}
+
+.message-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 7px;
+  border-radius: var(--radius-md);
+  color: var(--surface-tertiary-foreground);
+  font-size: var(--text-xs);
+  letter-spacing: -0.004em;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.message-action:active {
+  background: var(--muted);
+  color: var(--foreground);
+  transform: scale(0.94);
+}
+
+/*
+ * Confirmed. Green, briefly, then back.
+ *
+ * The label swaps Copy -> Copied rather than the icon changing alone: on a
+ * 14px glyph the difference between a clipboard and a tick is not reliably
+ * legible at arm's length, and this is the one moment the control has
+ * something to say.
+ */
+.message-action.is-done {
+  color: var(--success);
+}
+
+.message-action-label {
+  font-weight: var(--font-weight-medium);
+}
+
+/*
+ * The label is the affordance on a phone -- there is no hover to reveal a
+ * tooltip, so an unlabelled 14px glyph is a guess. It stays.
+ */
+
+
+/* =========================================================================
+ * Claude theme pass: warmth, depth, and the two gradients that earn a place.
+ * ========================================================================= */
+
+/*
+ * The page is very slightly lighter at the top.
+ *
+ * This is the only full-screen gradient in the app and it is almost
+ * invisible by design -- about 1% of lightness across the whole viewport.
+ * What it buys is that the page stops reading as a flat fill: there is a
+ * faint sense of light coming from above, which is what makes the white
+ * cards look like they are ON something rather than cut out of it.
+ *
+ * Fixed attachment so it belongs to the screen, not the scroll. A gradient
+ * that slides with the content is a visible moving band; one pinned to the
+ * viewport is just ambient light.
+ *
+ * No blue, no purple, no two-stop colour ramp. The stops are the page
+ * colour and the page colour very slightly lifted.
+ */
+.app {
+  background:
+    linear-gradient(
+      to bottom,
+      oklch(100% 0 0 / 0.55) 0%,
+      oklch(100% 0 0 / 0) 42%
+    ),
+    var(--page);
+  background-attachment: fixed;
+}
+
+.dark .app {
+  background:
+    linear-gradient(
+      to bottom,
+      oklch(100% 0 0 / 0.035) 0%,
+      oklch(100% 0 0 / 0) 42%
+    ),
+    var(--page);
+  background-attachment: fixed;
+}
+
+/*
+ * The thread and home scrollers must not paint over it.
+ *
+ * Both used to set `background: var(--background)`, which is the same
+ * value and therefore looked identical -- until the page gained a
+ * gradient, at which point they became opaque rectangles covering it.
+ */
+.thread-scroll,
+.home-scroll {
+  background: transparent;
+}
+
+/*
+ * A soft warm bloom behind the home mark.
+ *
+ * The second and last gradient. The resting screen is a single small clay
+ * glyph on a large empty page, and without something under it the mark
+ * reads as a sticker. A wide, very low-alpha radial in the mark's own hue
+ * gives it somewhere to sit.
+ *
+ * 0.07 alpha over ~280px. At anything stronger it becomes a visible blob
+ * and the screen looks like it is loading something.
+ */
+.rest-hero {
+  position: relative;
+  isolation: isolate;
+}
+
+.rest-hero::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  left: 50%;
+  top: 50%;
+  width: 300px;
+  height: 300px;
+  transform: translate(-50%, -62%);
+  pointer-events: none;
+  background: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--mark-warm) 7%, transparent) 0%,
+    color-mix(in oklab, var(--mark-warm) 3%, transparent) 42%,
+    transparent 70%
+  );
+}
+
+/*
+ * The mark breathes.
+ *
+ * Eight seconds per cycle and a 3% scale range, which is slow and small
+ * enough that it never catches the eye directly -- you notice it only if
+ * you look at the mark and wait. Anything faster or larger reads as a
+ * loading indicator, and the resting screen is the opposite of loading.
+ */
+.rest-mark {
+  animation: mark-breathe 8s var(--ease-in-out) infinite;
+}
+
+@keyframes mark-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.94;
+  }
+  50% {
+    transform: scale(1.03);
+    opacity: 1;
+  }
+}
+
+/* --- send button ---------------------------------------------------------- */
+
+/*
+ * The send button gets a real fill rather than a flat one.
+ *
+ * A two-stop vertical ramp on a 34px circle is not decoration you can
+ * consciously see; it is what stops a solid dark circle looking like a
+ * hole punched in the card. Two percent of lightness, top to bottom.
+ */
+.round-button.send:not(:disabled) {
+  background:
+    linear-gradient(
+      to bottom,
+      oklch(from var(--primary) calc(l + 0.04) c h) 0%,
+      var(--primary) 100%
+    );
+  box-shadow: 0 1px 2px oklch(18% 0.006 70 / 0.22);
+}
+
+/*
+ * `oklch(from ...)` is recent. Where it is unsupported the whole
+ * declaration is dropped and the flat `--primary` from the base rule
+ * stands, which is exactly the old appearance -- no fallback needed beyond
+ * making sure the base rule still sets a background.
+ */
+
+/* --- unread dot ----------------------------------------------------------- */
+
+/*
+ * Now clay rather than sky.
+ *
+ * It inherits `--brand`, which changed underneath it; this rule exists to
+ * document that the change was intended. A blue dot was the last cool
+ * colour in the app and it was the one thing on the history screen that
+ * did not belong to the palette.
+ */
+.unread-dot {
+  background: var(--brand);
+}
+
+/* --- pills: true capsules ------------------------------------------------- */
+
+/*
+ * Every pill-shaped control is a real capsule.
+ *
+ * `--radius-full` resolves to 999px, which any browser clamps to exactly
+ * half the height -- a genuine capsule rather than a rounded rectangle
+ * that happens to look close. The distinction matters at these sizes: a
+ * 30px pill with a 20px radius keeps a short straight run in the middle of
+ * each end, and that flat spot is what makes an otherwise fine control
+ * read as slightly off.
+ */
+.pill,
+.round-button,
+.question-reply input,
+.question-reply button,
+.list-search,
+.tab-deck-go input,
+.segmented,
+.rest-cue {
+  border-radius: var(--radius-full);
+}
+
+/*
+ * The segmented control's own buttons sit inside a capsule with 3px of
+ * padding, so they are capsules too -- concentric, and the only shape that
+ * can nest inside a capsule without leaving a crescent gap at the ends.
+ */
+.segmented button {
+  border-radius: var(--radius-full);
+}
+
+/* --- tab deck ------------------------------------------------------------- */
+
+/*
+ * A live list needs to look live.
+ *
+ * The active tab gets the accent rather than a neutral chip: on a phone
+ * glancing at what the Mac is doing, "which one is in front" is the single
+ * most useful fact on the screen.
+ */
+.tab-deck-active {
+  background: color-mix(in oklab, var(--brand) 14%, transparent);
+  color: var(--brand);
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-medium);
+  flex: none;
+}
+
+.tab-deck-row {
+  border-radius: var(--radius-lg);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.tab-deck-row:active {
+  background: var(--muted);
+}
+
+/* A tab arriving from a poll fades in rather than snapping into the list. */
+.tab-deck-row {
+  animation: turn-in 0.22s var(--ease-emphasized) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rest-mark,
+  .tab-deck-row {
+    animation: none;
+  }
+}
+
+/* --- voice input ------------------------------------------------------- */
+
+/*
+ * The mic is a press-and-hold control, so it needs to look held. The scale
+ * change is small on purpose: this button sits in a row of round buttons and
+ * a big transform would shove the row around while recording.
+ */
+.voice-button {
+  position: relative;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+  touch-action: none; /* holding the button must not start a scroll */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.voice-button.is-recording {
+  background: var(--mark-warm, var(--brand));
+  color: var(--color-white, #fff);
+  transform: scale(1.06);
+}
+
+.voice-button.is-busy {
+  opacity: 0.75;
+}
+
+/* Live level meter. Five bars, oldest to newest, so speech reads as motion
+   travelling across the button rather than five bars twitching in unison. */
+.voice-wave {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 17px;
+}
+
+.voice-bar {
+  width: 2px;
+  height: 15px;
+  border-radius: 1px;
+  background: currentColor;
+  transform-origin: center;
+  transform: scaleY(0.15);
+  transition: transform 90ms linear;
+}
+
+/* Transcribing. Three dots rather than a spinner: a spinner in this slot
+   reads as "sending", which is the next thing the user does, not this. */
+.voice-dots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 17px;
+}
+
+.voice-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: voice-dot 1s ease-in-out infinite;
+}
+
+.voice-dots span:nth-child(2) { animation-delay: 0.16s; }
+.voice-dots span:nth-child(3) { animation-delay: 0.32s; }
+
+@keyframes voice-dot {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-bar { transition: none; }
+  .voice-dots span { animation: none; opacity: 0.6; }
+  .voice-button.is-recording { transform: none; }
+}
+
+.composer-voice-error {
+  margin: 2px 4px 0;
+  font-size: var(--text-xs, 12px);
+  color: var(--text-secondary, #8a8378);
+}
+
+/* ====================================================================
+ * The side page: search
+ *
+ * Slides over the home screen from the right edge. It is a sibling of the
+ * home content rather than a second cell in a shared transformed track,
+ * because a transform on a common ancestor would become the containing
+ * block for the docked composer and every sheet -- a lot of layout risk
+ * for something that only needs to move along one axis.
+ * ==================================================================== */
+
+.app-home {
+  position: relative;
+  overflow: hidden;
+}
+
+.side-page {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  background: var(--page);
+  transform: translate3d(100%, 0, 0);
+  /* Matches the weight of the home screen's own snap: quick enough to feel
+     attached to the finger, slow enough that the eye tracks where it went. */
+  transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-home.side-open .side-page {
+  transform: translate3d(0, 0, 0);
+}
+
+/* While a finger owns the panel, position comes from the inline transform
+   and a transition would fight it into lag. */
+.app-home.side-dragging .side-page {
+  transition: none;
+}
+
+/* =======================================================================
+   Browser: the search panel, rebuilt as a real browser.
+   ===================================================================== */
+
+.browser-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--page, oklch(97.3% 0.004 92));
+}
+
+.browser-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  padding-top: calc(var(--shell-content-top, 0px) + 6px);
+  background: var(--surface-primary, #fff);
+  border-bottom: 1px solid var(--border, oklch(92% 0.004 92));
+}
+
+.browser-omni {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 12px;
+  background: var(--page, oklch(95.5% 0.004 92));
+  border: 1px solid var(--border, oklch(91% 0.004 92));
+  border-radius: 20px;
+  min-width: 0;
+}
+
+.browser-omni svg {
+  flex: none;
+  color: var(--muted-foreground, oklch(52% 0.012 80));
+}
+
+.browser-omni-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  font: 15px/1.3 var(--font-sans, -apple-system, system-ui, sans-serif);
+  color: var(--foreground, #1a1a1a);
+}
+
+.browser-omni-input::placeholder {
+  color: var(--muted-foreground, oklch(55% 0.012 80));
+}
+
+.browser-omni-display {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  font: 15px/1.3 var(--font-sans, -apple-system, system-ui, sans-serif);
+  color: var(--foreground, #1a1a1a);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: text;
+}
+
+.browser-omni-display:empty::before {
+  content: 'Search Google or type a link';
+  color: var(--muted-foreground, oklch(55% 0.012 80));
+}
+
+.browser-icon-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  background: none;
+  border-radius: 50%;
+  color: var(--muted-foreground, oklch(48% 0.012 80));
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.browser-icon-btn:active {
+  background: var(--border, oklch(90% 0.004 92));
+}
+
+.browser-clear svg { color: var(--muted-foreground, oklch(52% 0.012 80)); }
+
+.browser-cancel {
+  flex: none;
+  border: 0;
+  background: none;
+  font: 15px/1 var(--font-sans, -apple-system, system-ui, sans-serif);
+  color: var(--mark-warm, oklch(55% 0.088 52));
+  padding: 4px 4px;
+  cursor: pointer;
+}
+
+/* The typeahead overlay. */
+.omni-sheet {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--page, oklch(97.3% 0.004 92));
+  -webkit-overflow-scrolling: touch;
+}
+
+.omni-sheet::-webkit-scrollbar { display: none; }
+
+.omni-list {
+  padding: 4px 0;
+}
+
+.omni-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: 0;
+  background: none;
+  padding: 10px 18px;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.omni-row:active {
+  background: var(--border, oklch(91% 0.004 92));
+}
+
+.omni-mark {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--border, oklch(90% 0.004 92));
+}
+
+.omni-mark-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 10px/1 var(--font-sans, -apple-system, system-ui, sans-serif);
+  color: var(--muted-foreground, oklch(48% 0.012 80));
+}
+
+.omni-glyph {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--muted-foreground, oklch(50% 0.012 80));
+}
+
+.omni-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.omni-primary {
+  font: 15px/1.35 var(--font-sans, -apple-system, system-ui, sans-serif);
+  color: var(--foreground, #1a1a1a);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.omni-secondary {
+  font: 12px/1.3 var(--font-sans, -apple-system, system-ui, sans-serif);
+  color: var(--muted-foreground, oklch(55% 0.012 80));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.omni-empty {
+  text-align: center;
+  padding: 40px 20px;
+  font: 14px/1.5 var(--font-sans, -apple-system, system-ui, sans-serif);
+  color: var(--muted-foreground, oklch(55% 0.012 80));
+}
+
+/* The framed page. */
+.browser-view {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  background: #fff;
+  overflow: hidden;
+}
+
+.browser-view.is-cropped {
+  /* The frame sits shifted up by HEADER_CROP_PX, and is that much taller,
+     so cropping the header does not lose any of the scrollable page. */
+  overflow: hidden;
+}
+
+.browser-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: #fff;
+}
+
+.browser-frame.is-cropped {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* Pulled up by the sticky header's height and sized taller by the same
+     amount, both set inline via style. */
+}
+
+/* Progress bar, shown until the frame's onLoad fires. */
+.browser-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--mark-warm, oklch(63% 0.088 52));
+  z-index: 10;
+  animation: browser-bar-grow 1.2s ease-in-out infinite;
+}
+
+@keyframes browser-bar-grow {
+  0%   { transform: scaleX(0);   transform-origin: left;  opacity: 1; }
+  50%  { transform: scaleX(0.7); transform-origin: left; opacity: 1; }
+  100% { transform: scaleX(1);   transform-origin: right; opacity: 0.3; }
+}
+
+.browser-blank {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px;
+  text-align: center;
+  background: var(--page, oklch(97.3% 0.004 92));
+}
+
+.browser-blank-title {
+  font: 600 22px/1 var(--font-serif, ui-serif, 'New York', Georgia, serif);
+  color: var(--foreground, #1a1a1a);
+  margin: 0;
+}
+
+.browser-blank-note {
+  font: 14px/1.5 var(--font-sans, -apple-system, system-ui, sans-serif);
+  color: var(--muted-foreground, oklch(55% 0.012 80));
+  margin: 0;
+  max-width: 280px;
+}
+
+/* The escape hatch for pages that refuse to be framed. */
+.browser-escape {
+  flex: none;
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--border, oklch(91% 0.004 92));
+  background: var(--surface-primary, #fff);
+  padding: 10px;
+  font: 13px/1 var(--font-sans, -apple-system, system-ui, sans-serif);
+  color: var(--mark-warm, oklch(55% 0.088 52));
+  cursor: pointer;
+}
+
+/*
+ * Pairing recovery on the boot screen.
+ *
+ * Only ever seen on a phone that cannot get in, so it is sized for one
+ * thumb and one paste rather than for a form. The field is deliberately
+ * the widest thing on the screen: a pairing link is long, and being able
+ * to see that the paste actually landed is worth more here than balance.
+ */
+.pair-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(340px, 100%);
+  margin-top: 22px;
+}
+
+.pair-prompt-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: 1px solid var(--rule, #e3ded2);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  color: inherit;
+  /* 16px minimum: iOS zooms the whole page in on focus for anything
+     smaller, which on this screen would leave the field off-centre and
+     the page scrolled sideways. */
+  font-size: 16px;
+  font-family: inherit;
+}
+
+.pair-prompt-input:focus {
+  outline: 2px solid var(--accent, #8a7f6a);
+  outline-offset: 1px;
+}
+
+.pair-prompt-go {
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ink, #1a1a1a);
+  color: var(--paper, #faf9f6);
+  font-size: 15px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.pair-prompt-go:disabled {
+  opacity: 0.4;
+}
+
+.pair-prompt-error {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--danger, #b23c3c);
+}
+
+/*
+ * Install hint, iOS browser tab only.
+ *
+ * Pinned to the bottom because that is where the Share button it refers to
+ * lives in Safari, and above the home indicator so it is not sitting under
+ * the gesture area.
+ */
+.install-hint {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--ink, #1a1a1a);
+  color: var(--paper, #faf9f6);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
+}
+
+.install-hint-text {
+  margin: 0;
+  flex: 1;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.install-hint-close {
+  flex: none;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  opacity: 0.65;
 }
